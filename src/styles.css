@@ -23,6 +23,13 @@ button:focus-visible, input:focus-visible { outline: 3px dashed #171513; outline
 label { display: flex; justify-content: space-between; font-size: 13px; }
 input[type='range'] { width: 100%; min-height: 44px; accent-color: var(--rail-steel); }
 .tool-note { font-size: 11px; line-height: 1.6; }
+.textures { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; margin: 16px 0 24px; }
+.textures button, #clear-artwork { min-height: 44px; border: 2px solid var(--rail-steel); background: #fff4db; color: var(--rail-steel); font: inherit; font-size: 12px; cursor: pointer; }
+.textures button { text-transform: capitalize; }
+.textures button[aria-pressed='true'] { background: var(--rail-steel); color: #fff4db; box-shadow: 3px 3px 0 #f1aa2d; }
+#clear-artwork { width: 100%; border-color: #a32d25; color: #a32d25; }
+#save-status { font-size: 12px; line-height: 1.6; color: var(--rail-steel); }
+#save-status[data-error='true'] { color: #a32d25; }
 .stage-panel { min-width: 0; padding: 24px; background: linear-gradient(#d4dbd4, #ebe1c9); }
 .stage-heading { display: flex; justify-content: space-between; gap: 16px; }
 .stage-heading span { white-space: nowrap; }

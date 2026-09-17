@@ -1,9 +1,14 @@
 import { isInsidePaintableTrainArea, PAINTABLE_REGIONS, TRAIN_HEIGHT, TRAIN_WIDTH, type Point } from './train-template';
 
-export type TextureId = 'solid';
+export const TEXTURES = ['solid', 'spray', 'sticker', 'marker'] as const;
+export type TextureId = typeof TEXTURES[number];
 export type ToolState = { color: string; texture: TextureId; brushSize: number };
 // Positions and diameter are normalized; size is a fraction of train width.
 export type PaintMark = Point & { color: string; texture: TextureId; size: number };
+
+export function createPaintMark(point: Point, tool: ToolState): PaintMark {
+  return { ...point, color: tool.color, texture: tool.texture, size: tool.brushSize };
+}
 
 export class TrainPainter {
   private readonly context: CanvasRenderingContext2D;
@@ -12,7 +17,8 @@ export class TrainPainter {
   private previous: Point | null = null;
   private tool: ToolState;
 
-  constructor(private readonly canvas: HTMLCanvasElement, tool: ToolState) {
+  constructor(private readonly canvas: HTMLCanvasElement, tool: ToolState,
+    private readonly onChange: (marks: PaintMark[]) => void = () => {}, initialMarks: PaintMark[] = []) {
     const context = canvas.getContext('2d');
     if (!context) throw new Error('Canvas painting is unavailable in this browser.');
     this.context = context;
@@ -26,6 +32,10 @@ export class TrainPainter {
         region.width * TRAIN_WIDTH, region.height * TRAIN_HEIGHT);
     }
     context.clip();
+    for (const mark of initialMarks) {
+      this.marks.push({ ...mark });
+      this.render(mark);
+    }
     canvas.addEventListener('pointerdown', this.start);
     canvas.addEventListener('pointermove', this.move);
     canvas.addEventListener('pointerup', this.finish);
@@ -35,6 +45,14 @@ export class TrainPainter {
   }
 
   setTool(tool: ToolState): void { this.tool = { ...tool }; }
+
+  clear(): void {
+    this.marks.length = 0;
+    const wasActive = this.activePointer !== null;
+    this.cancel();
+    this.context.clearRect(0, 0, TRAIN_WIDTH, TRAIN_HEIGHT);
+    if (!wasActive) this.onChange([]);
+  }
 
   private point(event: PointerEvent): Point {
     const bounds = this.canvas.getBoundingClientRect();
@@ -68,12 +86,59 @@ export class TrainPainter {
 
   private paint(point: Point): void {
     if (!isInsidePaintableTrainArea(point)) return;
-    const mark: PaintMark = { ...point, color: this.tool.color, texture: this.tool.texture, size: this.tool.brushSize };
+    const mark = createPaintMark(point, this.tool);
     this.marks.push(mark);
-    this.context.fillStyle = mark.color;
-    this.context.beginPath();
-    this.context.arc(mark.x * TRAIN_WIDTH, mark.y * TRAIN_HEIGHT, mark.size * TRAIN_WIDTH / 2, 0, Math.PI * 2);
-    this.context.fill();
+    this.render(mark);
+  }
+
+  private render(mark: PaintMark): void {
+    const ctx = this.context;
+    const x = mark.x * TRAIN_WIDTH;
+    const y = mark.y * TRAIN_HEIGHT;
+    const radius = mark.size * TRAIN_WIDTH / 2;
+    ctx.save();
+    ctx.fillStyle = mark.color;
+    if (mark.texture === 'spray') {
+      // Position-seeded speckles replay identically without storing random pixels.
+      let seed = (Math.round(mark.x * 1e6) ^ Math.round(mark.y * 1e6)) >>> 0;
+      const random = (): number => {
+        seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+        return seed / 4294967296;
+      };
+      ctx.globalAlpha = 0.45;
+      for (let i = 0; i < 24; i++) {
+        const angle = random() * Math.PI * 2;
+        const distance = Math.sqrt(random()) * radius * 0.9;
+        ctx.beginPath();
+        ctx.arc(x + Math.cos(angle) * distance, y + Math.sin(angle) * distance,
+          radius * 0.065, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    } else if (mark.texture === 'sticker') {
+      ctx.beginPath();
+      for (let i = 0; i < 10; i++) {
+        const angle = i * Math.PI / 5 - Math.PI / 2;
+        const r = radius * (i % 2 ? 0.48 : 1);
+        const px = x + Math.cos(angle) * r;
+        const py = y + Math.sin(angle) * r;
+        if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+      }
+      ctx.closePath();
+      ctx.strokeStyle = '#fff4db';
+      ctx.lineWidth = Math.max(0.5, radius * 0.12);
+      ctx.fill();
+      ctx.stroke();
+    } else if (mark.texture === 'marker') {
+      ctx.globalAlpha = 0.55;
+      ctx.translate(x, y);
+      ctx.rotate(-Math.PI / 6);
+      ctx.fillRect(-radius, -radius * 0.3, radius * 2, radius * 0.6);
+    } else {
+      ctx.beginPath();
+      ctx.arc(x, y, radius, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
   }
 
   private finish = (event: PointerEvent): void => {
@@ -85,6 +150,7 @@ export class TrainPainter {
     this.activePointer = null;
     this.previous = null;
     if (pointer !== null && this.canvas.hasPointerCapture(pointer)) this.canvas.releasePointerCapture(pointer);
+    if (pointer !== null) this.onChange(this.marks.map(mark => ({ ...mark })));
   };
 
   destroy(): void {
