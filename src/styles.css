@@ -38,6 +38,20 @@ input[type='range'] { width: 100%; min-height: 44px; accent-color: var(--rail-st
 .train-stage canvas { touch-action: none; cursor: crosshair; }
 #paint-help { font-size: 12px; line-height: 1.6; }
 footer { margin-top: 24px; line-height: 1.6; }
+.display-panel { margin-top: 36px; padding: 24px; border: 2px solid var(--rail-steel); background: #f9ecd6; }
+.display-panel > p, .gallery-card p { font-size: 12px; line-height: 1.6; }
+.display-panel button { min-height: 44px; padding: 8px 14px; margin: 4px; border: 2px solid var(--rail-steel); background: #fff4db; color: var(--rail-steel); font: inherit; font-size: 12px; cursor: pointer; }
+#publish-artwork { background: var(--rail-steel); color: #fff4db; margin-left: 0; }
+#publish-artwork:disabled { opacity: .6; cursor: wait; }
+#gallery-status[data-error='true'] { color: #a32d25; }
+.gallery-feed { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr)); gap: 20px; }
+.gallery-card { min-width: 0; padding: 12px; border: 1px solid var(--rail-steel); background: #ebe1c9; }
+.gallery-card img { display: block; width: 100%; height: auto; }
+.gallery-card h3 { font-size: 16px; overflow-wrap: anywhere; }
+.ranking-heading { margin: 32px 0 12px; }
+#gallery-ranking { padding-left: 32px; }
+#gallery-ranking li { padding: 10px; border-bottom: 1px solid #24485c40; font-size: 13px; overflow-wrap: anywhere; }
+#gallery-ranking li::marker { font-weight: bold; color: var(--rail-steel); }
 @media (max-width: 760px) {
   main { padding: 28px 16px; }
   .workshop { grid-template-columns: 1fr; }

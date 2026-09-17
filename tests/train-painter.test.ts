@@ -20,9 +20,46 @@ function setup(initial = [] as ReturnType<typeof createPaintMark>[]) {
       pointerId: 1, isPrimary: true, button: 0, buttons: 1, clientX: 500, clientY: 200, ...overrides,
     }));
   };
-  return { painter, context, onChange, send };
+  return { painter, canvas, context, onChange, send };
 }
 afterEach(() => vi.unstubAllGlobals());
+
+describe('gallery snapshots', () => {
+  it('freezes paint before loading the train and exports base then overlay as PNG', async () => {
+    const { painter, canvas } = setup();
+    const overlayContext = { drawImage: vi.fn() };
+    const outputContext = { drawImage: vi.fn(), fillRect: vi.fn(), fillStyle: '' };
+    const overlay = { getContext: () => overlayContext, width: 0, height: 0 };
+    const output = { getContext: () => outputContext, toDataURL: vi.fn(() => 'data:image/png;base64,YQ=='), width: 0, height: 0 };
+    vi.stubGlobal('document', { createElement: vi.fn().mockReturnValueOnce(overlay).mockReturnValueOnce(output) });
+    let train: { onload: () => void; src: string };
+    vi.stubGlobal('Image', class { constructor() { train = this as unknown as typeof train; } });
+    const result = painter.createSnapshot();
+    expect(overlayContext.drawImage).toHaveBeenCalledWith(canvas, 0, 0, 1000, 400);
+    expect(outputContext.drawImage).not.toHaveBeenCalled();
+    expect(decodeURIComponent(train!.src)).toContain('width="1000" height="400"');
+    painter.clear();
+    train!.onload();
+    expect(await result).toBe('data:image/png;base64,YQ==');
+    expect(outputContext.drawImage.mock.calls).toEqual([[train!, 0, 0, 1000, 400], [overlay, 0, 0]]);
+    expect(output.toDataURL).toHaveBeenCalledWith('image/png');
+    expect(output.width).toBe(1000);
+    expect(output.height).toBe(400);
+    painter.destroy();
+  });
+  it('rejects unavailable canvas and image load errors', async () => {
+    const { painter } = setup();
+    vi.stubGlobal('document', { createElement: () => ({ getContext: () => null }) });
+    await expect(painter.createSnapshot()).rejects.toThrow('canvas unavailable');
+    vi.stubGlobal('document', { createElement: () => ({ getContext: () => ({ drawImage: vi.fn() }) }) });
+    vi.stubGlobal('Image', class {
+      onerror = () => {};
+      set src(_value: string) { this.onerror(); }
+    });
+    await expect(painter.createSnapshot()).rejects.toThrow('could not load');
+    painter.destroy();
+  });
+});
 
 describe('paint marks and stroke lifecycle', () => {
   it.each(TEXTURES)('copies normalized position and current %s tool into a mark', texture => {

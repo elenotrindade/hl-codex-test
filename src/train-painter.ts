@@ -1,4 +1,4 @@
-import { isInsidePaintableTrainArea, PAINTABLE_REGIONS, TRAIN_HEIGHT, TRAIN_WIDTH, type Point } from './train-template';
+import { isInsidePaintableTrainArea, PAINTABLE_REGIONS, TRAIN_HEIGHT, TRAIN_WIDTH, trainTemplate, type Point } from './train-template';
 
 export const TEXTURES = ['solid', 'spray', 'sticker', 'marker'] as const;
 export type TextureId = typeof TEXTURES[number];
@@ -45,6 +45,33 @@ export class TrainPainter {
   }
 
   setTool(tool: ToolState): void { this.tool = { ...tool }; }
+
+  async createSnapshot(): Promise<string> {
+    const overlay = document.createElement('canvas');
+    overlay.width = TRAIN_WIDTH;
+    overlay.height = TRAIN_HEIGHT;
+    const overlayContext = overlay.getContext('2d');
+    if (!overlayContext) throw new Error('Snapshot canvas unavailable');
+    // Freeze the paint before loading the SVG so later strokes cannot alter this submission.
+    overlayContext.drawImage(this.canvas, 0, 0, TRAIN_WIDTH, TRAIN_HEIGHT);
+    const train = new Image();
+    await new Promise<void>((resolve, reject) => {
+      train.onload = () => resolve();
+      train.onerror = () => reject(new Error('Train image could not load'));
+      train.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(trainTemplate().replace('<svg ',
+        `<svg width="${TRAIN_WIDTH}" height="${TRAIN_HEIGHT}" `))}`;
+    });
+    const snapshot = document.createElement('canvas');
+    snapshot.width = TRAIN_WIDTH;
+    snapshot.height = TRAIN_HEIGHT;
+    const context = snapshot.getContext('2d');
+    if (!context) throw new Error('Snapshot canvas unavailable');
+    context.fillStyle = '#ebe1c9';
+    context.fillRect(0, 0, TRAIN_WIDTH, TRAIN_HEIGHT);
+    context.drawImage(train, 0, 0, TRAIN_WIDTH, TRAIN_HEIGHT);
+    context.drawImage(overlay, 0, 0);
+    return snapshot.toDataURL('image/png');
+  }
 
   clear(): void {
     this.marks.length = 0;

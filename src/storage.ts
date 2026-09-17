@@ -1,8 +1,10 @@
 import { TEXTURES, type PaintMark } from './train-painter';
 import { isInsidePaintableTrainArea } from './train-template';
+import { isGallery, type GalleryEntry } from './gallery';
 
 export type ArtworkSnapshot = { marks: PaintMark[]; updatedAt: string };
 export const ARTWORK_KEY = 'train-graffiti.artwork.v1';
+export const GALLERY_KEY = 'train-graffiti.gallery.v1';
 type StorageAccess = () => Pick<Storage, 'getItem' | 'setItem'>;
 type LoadResult = { snapshot: ArtworkSnapshot | null; status: 'loaded' | 'missing' | 'invalid' | 'unavailable' };
 const browserStorage: StorageAccess = () => window.localStorage;
@@ -38,6 +40,28 @@ export function saveArtwork(snapshot: ArtworkSnapshot, access: StorageAccess = b
   try {
     if (!isSnapshot(snapshot)) return false;
     access().setItem(ARTWORK_KEY, JSON.stringify(snapshot));
+    return true;
+  } catch { return false; }
+}
+
+export function loadGallery(access: StorageAccess = browserStorage): {
+  entries: GalleryEntry[] | null; status: LoadResult['status'];
+} {
+  let raw: string | null;
+  try { raw = access().getItem(GALLERY_KEY); }
+  catch { return { entries: null, status: 'unavailable' }; }
+  if (raw === null) return { entries: null, status: 'missing' };
+  try {
+    const value: unknown = JSON.parse(raw);
+    if (isGallery(value)) return { entries: value, status: 'loaded' };
+  } catch { /* Invalid gallery data falls back to built-in examples. */ }
+  return { entries: null, status: 'invalid' };
+}
+
+export function saveGallery(entries: GalleryEntry[], access: StorageAccess = browserStorage): boolean {
+  try {
+    if (!isGallery(entries)) return false;
+    access().setItem(GALLERY_KEY, JSON.stringify(entries));
     return true;
   } catch { return false; }
 }

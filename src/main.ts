@@ -1,7 +1,8 @@
 import './styles.css';
 import { trainTemplate } from './train-template';
 import { TrainPainter, TEXTURES, type TextureId, type ToolState } from './train-painter';
-import { loadArtwork, saveArtwork } from './storage';
+import { loadArtwork, saveArtwork, loadGallery, saveGallery } from './storage';
+import { seededGallery, publishArtwork, upvote, rankGallery } from './gallery';
 
 const colors = [
   ['Signal red', '#e2483d'], ['Amber', '#f1aa2d'], ['Chalk', '#fff4db'],
@@ -34,6 +35,17 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
         <div class="train-stage">${trainTemplate()}<canvas aria-label="Graffiti painting surface" aria-describedby="paint-help">Canvas support is required to paint.</canvas></div>
         <p id="paint-help">Drag with a mouse, pen, or finger. Windows and wheels stay clean.</p>
       </div>
+    </section>
+    <section class="display-panel" aria-labelledby="display-heading">
+      <h2 id="display-heading">03 / On display</h2>
+      <p>A mock public feed. Submissions and votes stay in this browser only. Nothing is uploaded.</p>
+      <button type="button" id="publish-artwork">Put on display</button>
+      <p id="gallery-status" role="status" aria-live="polite"></p>
+      <div id="gallery-feed" class="gallery-feed"></div>
+      <h2 class="ranking-heading">Yard ranking / Most upvoted</h2>
+      <p>Demo voting: vote as often as you like. Ties use entry ID order.</p>
+      <ol id="gallery-ranking"></ol>
+      <p id="share-status" role="status" aria-live="polite"></p>
     </section>
     <footer>Saved automatically after each stroke, in this browser only.</footer>
   </main>`;
@@ -73,5 +85,79 @@ document.querySelector<HTMLInputElement>('#brush-size')!.addEventListener('input
   tool.brushSize = value / 1000;
   painter.setTool(tool);
   document.querySelector<HTMLOutputElement>('#size-value')!.value = String(value);
+});
+const storedGallery = loadGallery();
+let entries = storedGallery.entries ?? seededGallery();
+const galleryStatus = document.querySelector<HTMLParagraphElement>('#gallery-status')!;
+const shareStatus = document.querySelector<HTMLParagraphElement>('#share-status')!;
+const feed = document.querySelector<HTMLDivElement>('#gallery-feed')!;
+const ranking = document.querySelector<HTMLOListElement>('#gallery-ranking')!;
+galleryStatus.textContent = {
+  loaded: 'Local display and votes restored.', missing: 'Built-in examples are ready. Add your train.',
+  invalid: 'Saved display could not be read. Showing built-in examples.',
+  unavailable: 'Local storage unavailable. Display changes will last only for this session.',
+}[storedGallery.status];
+
+function persistGallery(message: string): void {
+  const success = saveGallery(entries);
+  galleryStatus.textContent = `${message} ${success ? 'Saved in this browser only.' : 'Could not save; changes may be lost on reload.'}`;
+  galleryStatus.dataset.error = String(!success);
+}
+
+function renderGallery(): void {
+  feed.replaceChildren(...entries.map(entry => {
+    const card = document.createElement('article');
+    card.className = 'gallery-card';
+    const image = document.createElement('img');
+    image.src = entry.imageDataUrl;
+    image.alt = `${entry.title} - painted train`;
+    image.width = 1000;
+    image.height = 400;
+    const title = document.createElement('h3');
+    title.textContent = entry.title;
+    const source = document.createElement('p');
+    source.textContent = entry.source === 'seed' ? 'Built-in example / mock public' : 'Your submission / this browser only';
+    const vote = document.createElement('button');
+    vote.type = 'button';
+    vote.textContent = `Upvote (${entry.votes})`;
+    vote.setAttribute('aria-label', `Upvote ${entry.title}, ${entry.votes} votes`);
+    vote.addEventListener('click', () => {
+      entries = upvote(entries, entry.id);
+      persistGallery(`Upvoted ${entry.title}.`);
+      renderGallery();
+      const index = entries.findIndex(item => item.id === entry.id);
+      feed.children[index]?.querySelector('button')?.focus();
+    });
+    const share = document.createElement('button');
+    share.type = 'button';
+    share.textContent = 'Mock social share';
+    share.setAttribute('aria-label', `Mock social share for ${entry.title}`);
+    share.addEventListener('click', () => {
+      shareStatus.textContent = `Demo only: ${entry.title} was not shared. No social platform was contacted.`;
+    });
+    card.append(image, title, source, vote, share);
+    return card;
+  }));
+  ranking.replaceChildren(...rankGallery(entries).map(entry => {
+    const item = document.createElement('li');
+    item.textContent = `${entry.title} / ${entry.votes} votes / ${entry.source === 'seed' ? 'example' : 'local'}`;
+    return item;
+  }));
+}
+
+renderGallery();
+const publish = document.querySelector<HTMLButtonElement>('#publish-artwork')!;
+publish.addEventListener('click', async () => {
+  publish.disabled = true;
+  galleryStatus.textContent = 'Preparing your train snapshot...';
+  try {
+    const image = await painter.createSnapshot();
+    entries = publishArtwork(entries, image);
+    renderGallery();
+    persistGallery('Train added to the mock display.');
+  } catch {
+    galleryStatus.textContent = 'Could not create the train snapshot. Nothing was published; please try again.';
+    galleryStatus.dataset.error = 'true';
+  } finally { publish.disabled = false; }
 });
 if (import.meta.hot) import.meta.hot.dispose(() => painter.destroy());
