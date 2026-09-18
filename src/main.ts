@@ -1,9 +1,10 @@
 import './styles.css';
 import { TrainPainter, TEXTURES, type TextureId, type ToolState } from './train-painter';
 import { loadArtwork, saveArtwork, loadGallery, saveGallery } from './storage';
-import { seededGallery, publishArtwork, upvote, rankGallery } from './gallery';
+import { seededGallery, publishArtwork, upvote, rankGallery, getRecentGallery, type GalleryEntry } from './gallery';
 import { getScenario, scenarios, type PaintScenario } from './scenarios';
 import { formatHexColor, hsvToRgb, parseHexColor, rgbToHsv, type HsvColor, type RgbColor } from './color-tools';
+import { openDialog } from './dialogs';
 
 const colors = [
   ['Signal red', '#e2483d'], ['Amber', '#f1aa2d'], ['Chalk', '#fff4db'],
@@ -65,6 +66,8 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
     <section class="display-panel" aria-labelledby="display-heading">
       <h2 id="display-heading">03 / On display</h2>
       <p>A mock public feed. Submissions and votes stay in this browser only. Nothing is uploaded.</p>
+      <label for="artwork-title">Artwork name <span>optional</span></label>
+      <input id="artwork-title" type="text" maxlength="80" placeholder="Midnight layup" autocomplete="off" />
       <button type="button" id="publish-artwork">Put on display</button>
       <p id="gallery-status" role="status" aria-live="polite"></p>
       <div id="gallery-feed" class="gallery-feed"></div>
@@ -76,6 +79,8 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
       <p>Demo voting: vote as often as you like. Ties use entry ID order.</p>
       <ol id="gallery-ranking"></ol>
     </section>
+    <dialog id="share-dialog" aria-labelledby="share-dialog-title"></dialog>
+    <dialog id="artwork-dialog" aria-labelledby="artwork-dialog-title"></dialog>
     <footer>Saved automatically after each stroke, in this browser only.</footer>
   </main>`;
 
@@ -222,7 +227,7 @@ function persistGallery(message: string): void {
 }
 
 function renderGallery(): void {
-  feed.replaceChildren(...entries.map(entry => {
+  feed.replaceChildren(...getRecentGallery(entries, 3).map(entry => {
     const card = document.createElement('article');
     card.className = 'gallery-card';
     const image = document.createElement('img');
@@ -242,24 +247,68 @@ function renderGallery(): void {
       entries = upvote(entries, entry.id);
       persistGallery(`Upvoted ${entry.title}.`);
       renderGallery();
-      const index = entries.findIndex(item => item.id === entry.id);
-      feed.children[index]?.querySelector('button')?.focus();
+      document.querySelector<HTMLButtonElement>(`[data-vote="${entry.id}"]`)?.focus();
     });
     const share = document.createElement('button');
     share.type = 'button';
     share.textContent = 'Mock social share';
     share.setAttribute('aria-label', `Mock social share for ${entry.title}`);
     share.addEventListener('click', () => {
-      shareStatus.textContent = `Demo only: ${entry.title} was not shared. No social platform was contacted.`;
+      openShareDialog(entry, share);
     });
     card.append(image, title, source, vote, share);
     return card;
   }));
   ranking.replaceChildren(...rankGallery(entries).map(entry => {
     const item = document.createElement('li');
-    item.textContent = `${entry.title} / ${entry.votes} votes / ${entry.source === 'seed' ? 'example' : 'local'}`;
+    item.className = 'ranking-card';
+    const image = document.createElement('img');
+    image.src = entry.imageDataUrl;
+    image.alt = `${entry.title} thumbnail`;
+    image.width = 1000;
+    image.height = 400;
+    const title = document.createElement('h3');
+    title.textContent = entry.title;
+    const votes = document.createElement('p');
+    votes.textContent = `${entry.votes} votes / ${entry.source === 'seed' ? 'example' : 'local'}`;
+    const zoom = document.createElement('button');
+    zoom.type = 'button';
+    zoom.textContent = 'Zoom artwork';
+    zoom.setAttribute('aria-label', `Zoom ${entry.title}`);
+    zoom.addEventListener('click', () => openArtworkDialog(entry, zoom));
+    const vote = document.createElement('button');
+    vote.type = 'button';
+    vote.dataset.vote = entry.id;
+    vote.textContent = `Upvote (${entry.votes})`;
+    vote.setAttribute('aria-label', `Upvote ${entry.title}, ${entry.votes} votes`);
+    vote.addEventListener('click', () => {
+      entries = upvote(entries, entry.id);
+      persistGallery(`Upvoted ${entry.title}.`);
+      renderGallery();
+      document.querySelector<HTMLButtonElement>(`[data-vote="${entry.id}"]`)?.focus();
+    });
+    item.append(image, title, votes, zoom, vote);
     return item;
   }));
+}
+
+function escapeHtml(value: string): string {
+  return value.replace(/[&<>"]/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[character]!);
+}
+
+function openShareDialog(entry: GalleryEntry, opener: HTMLElement): void {
+  const dialog = document.querySelector<HTMLDialogElement>('#share-dialog')!;
+  const title = escapeHtml(entry.title);
+  dialog.innerHTML = `<form method="dialog" class="dialog-card"><h2 id="share-dialog-title">Mock share</h2><p>Demo only: ${title} will not be posted. No social platform is contacted.</p><div class="platforms"><button value="yard">YardNet</button><button value="story">Street Story</button><button value="copy">Copy mock link</button></div><button value="close">Close</button></form>`;
+  dialog.addEventListener('close', () => { shareStatus.textContent = `Demo only: ${entry.title} was not shared. No social platform was contacted.`; }, { once: true });
+  openDialog(dialog, opener);
+}
+
+function openArtworkDialog(entry: GalleryEntry, opener: HTMLElement): void {
+  const dialog = document.querySelector<HTMLDialogElement>('#artwork-dialog')!;
+  const title = escapeHtml(entry.title);
+  dialog.innerHTML = `<form method="dialog" class="dialog-card lightbox"><h2 id="artwork-dialog-title">${title}</h2><img src="${entry.imageDataUrl}" alt="${title} enlarged artwork" width="1000" height="400" /><p>${entry.votes} votes / ${entry.source === 'seed' ? 'example' : 'local submission'}</p><button value="close">Close artwork</button></form>`;
+  openDialog(dialog, opener);
 }
 
 renderGallery();
@@ -271,7 +320,8 @@ publish.addEventListener('click', async () => {
   galleryStatus.textContent = `Preparing your ${activeScenario.label.toLowerCase()} snapshot...`;
   try {
     const image = await painter.createSnapshot();
-    entries = publishArtwork(entries, image);
+    entries = publishArtwork(entries, image, undefined, undefined, document.querySelector<HTMLInputElement>('#artwork-title')!.value);
+    document.querySelector<HTMLInputElement>('#artwork-title')!.value = '';
     renderGallery();
     persistGallery(`${activeScenario.label} added to the mock display.`);
   } catch {

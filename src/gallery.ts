@@ -19,12 +19,17 @@ export function seededGallery(): GalleryEntry[] {
 }
 
 export function publishArtwork(entries: readonly GalleryEntry[], imageDataUrl: string,
-  id: string = crypto.randomUUID(), createdAt = new Date().toISOString()): GalleryEntry[] {
+  id: string = crypto.randomUUID(), createdAt = new Date().toISOString(), title?: string): GalleryEntry[] {
   if (!/^data:image\/png;base64,[A-Za-z0-9+/]+={0,2}$/.test(imageDataUrl)) throw new Error('Invalid snapshot');
   if (entries.some(entry => entry.id === id)) throw new Error('Duplicate entry');
   const number = entries.filter(entry => entry.source === 'local').length + 1;
-  return [{ id, title: `Your train / ${String(number).padStart(3, '0')}`, imageDataUrl,
+  const localTitle = title?.trim().replace(/\s+/g, ' ').slice(0, 80) || `Your train / ${String(number).padStart(3, '0')}`;
+  return [{ id, title: localTitle, imageDataUrl,
     createdAt, votes: 0, source: 'local' }, ...entries];
+}
+
+export function getRecentGallery(entries: readonly GalleryEntry[], count = 3): GalleryEntry[] {
+  return [...entries].sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt) || b.id.localeCompare(a.id)).slice(0, count);
 }
 
 export function upvote(entries: readonly GalleryEntry[], id: string): GalleryEntry[] {
