@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createPaintMark, TEXTURES, TrainPainter, type ToolState } from '../src/train-painter';
+import { getScenario } from '../src/scenarios';
 
-const tool: ToolState = { color: '#e2483d', texture: 'solid', brushSize: 0.025 };
+const tool: ToolState = { color: '#e2483d', texture: 'solid', brushSize: 0.025, opacity: 0.8, weight: 1 };
 
-function setup(initial = [] as ReturnType<typeof createPaintMark>[], windowProperties = {}) {
+function setup(initial = [] as ReturnType<typeof createPaintMark>[], windowProperties = {}, onHistory = vi.fn()) {
   const context = Object.fromEntries(['scale', 'beginPath', 'rect', 'clip', 'save', 'restore', 'arc',
     'fill', 'stroke', 'moveTo', 'lineTo', 'closePath', 'translate', 'rotate', 'fillRect', 'clearRect']
     .map(name => [name, vi.fn()]));
@@ -14,13 +15,14 @@ function setup(initial = [] as ReturnType<typeof createPaintMark>[], windowPrope
   canvas.hasPointerCapture = () => false;
   vi.stubGlobal('window', Object.assign(new EventTarget(), windowProperties));
   const onChange = vi.fn();
-  const painter = new TrainPainter(canvas, tool, onChange, initial);
+  const onCursor = vi.fn();
+  const painter = new TrainPainter(canvas, tool, onChange, initial, undefined, onCursor, onHistory);
   const send = (type: string, overrides = {}) => {
     canvas.dispatchEvent(Object.assign(new Event(type), {
       pointerId: 1, isPrimary: true, button: 0, buttons: 1, clientX: 500, clientY: 200, ...overrides,
     }));
   };
-  return { painter, canvas, context, onChange, send };
+  return { painter, canvas, context, onChange, onCursor, send };
 }
 afterEach(() => vi.unstubAllGlobals());
 
@@ -116,6 +118,41 @@ describe('gallery snapshots', () => {
   });
 });
 
+describe('scenario-driven painting', () => {
+  it('switches clipping and hit testing to the active scenario', () => {
+    const { painter, context, send, onChange } = setup();
+    context.rect.mockClear();
+    painter.setScenario(getScenario('wall'));
+    expect(context.rect).toHaveBeenCalledWith(80, 88, 840, 200);
+    send('pointerdown', { clientX: 500, clientY: 110 });
+    send('pointerup');
+    expect(onChange).toHaveBeenCalledWith([createPaintMark({ x: 0.5, y: 0.275 }, tool)]);
+    onChange.mockClear();
+    send('pointerdown', { clientX: 500, clientY: 340 });
+    send('pointerup');
+    expect(onChange).not.toHaveBeenCalled();
+    painter.destroy();
+  });
+
+  it('uses the active scenario template and background for snapshots', async () => {
+    const { painter } = setup();
+    painter.setScenario(getScenario('vehicle'));
+    const overlayContext = { drawImage: vi.fn() };
+    const outputContext = { drawImage: vi.fn(), fillRect: vi.fn(), fillStyle: '' };
+    const overlay = { getContext: () => overlayContext, width: 0, height: 0 };
+    const output = { getContext: () => outputContext, toDataURL: vi.fn(() => 'data:image/png;base64,Yg=='), width: 0, height: 0 };
+    vi.stubGlobal('document', { createElement: vi.fn().mockReturnValueOnce(overlay).mockReturnValueOnce(output) });
+    let image: { onload: () => void; src: string };
+    vi.stubGlobal('Image', class { constructor() { image = this as unknown as typeof image; } });
+    const result = painter.createSnapshot();
+    expect(decodeURIComponent(image!.src)).toContain('Boxy street van');
+    image!.onload();
+    await expect(result).resolves.toBe('data:image/png;base64,Yg==');
+    expect(outputContext.fillStyle).toBe('#d7d0be');
+    painter.destroy();
+  });
+});
+
 describe('paint marks and stroke lifecycle', () => {
   it.each(TEXTURES)('copies normalized position and current %s tool into a mark', texture => {
     const current = { ...tool, texture };
@@ -123,7 +160,25 @@ describe('paint marks and stroke lifecycle', () => {
     const mark = createPaintMark(point, current);
     current.color = '#ffffff';
     point.x = 0;
-    expect(mark).toEqual({ x: 0.5, y: 0.6, size: 0.025, color: '#e2483d', texture });
+    expect(mark).toEqual({ x: 0.5, y: 0.6, size: 0.025, opacity: 0.8, color: '#e2483d', texture });
+  });
+  it('stores deterministic pressure-adjusted size and opacity', () => {
+    const mark = createPaintMark({ x: 0.5, y: 0.5 }, { ...tool, brushSize: 0.02, weight: 1.5, opacity: 0.35 }, 0.5);
+    expect(mark).toMatchObject({ x: 0.5, y: 0.5, color: '#e2483d', texture: 'solid', opacity: 0.35 });
+    expect(mark.size).toBeCloseTo(0.028);
+  });
+  it('emits clipped cursor preview state without saving artwork', () => {
+    const { painter, send, onChange, onCursor } = setup();
+    send('pointerenter', { pressure: 0.5 });
+    const activePreview = onCursor.mock.lastCall![0];
+    expect(activePreview).toMatchObject({ visible: true, x: 0.5, y: 0.5, color: '#e2483d', opacity: 0.8 });
+    expect(activePreview.size).toBeCloseTo(0.02875);
+    send('pointermove', { clientY: 0 });
+    expect(onCursor).toHaveBeenLastCalledWith({ visible: false, x: 0.5, y: 0, size: 0.025, color: '#e2483d', opacity: 0.8 });
+    send('pointerleave');
+    expect(onCursor).toHaveBeenLastCalledWith({ visible: false, x: 0, y: 0, size: 0, color: '#e2483d', opacity: 0.8 });
+    expect(onChange).not.toHaveBeenCalled();
+    painter.destroy();
   });
   it.each(['pointerup', 'pointercancel', 'lostpointercapture', 'blur'])('saves once on %s', ending => {
     const { painter, send, onChange } = setup();
@@ -134,13 +189,66 @@ describe('paint marks and stroke lifecycle', () => {
     expect(onChange).toHaveBeenCalledExactlyOnceWith([createPaintMark({ x: 0.5, y: 0.5 }, tool)]);
     painter.destroy();
   });
+  it('groups marks by stroke and undoes or redoes one stroke at a time', () => {
+    const { painter, send, onChange } = setup();
+    send('pointerdown', { clientX: 400 });
+    send('pointerup', { clientX: 400 });
+    send('pointerdown', { clientX: 600 });
+    send('pointerup', { clientX: 600 });
+    expect(painter.canUndo()).toBe(true);
+    expect(painter.canRedo()).toBe(false);
+    expect(painter.getMarks()).toEqual([
+      createPaintMark({ x: 0.4, y: 0.5 }, tool),
+      createPaintMark({ x: 0.6, y: 0.5 }, tool),
+    ]);
+    painter.undo();
+    expect(painter.getMarks()).toEqual([createPaintMark({ x: 0.4, y: 0.5 }, tool)]);
+    expect(onChange).toHaveBeenLastCalledWith([createPaintMark({ x: 0.4, y: 0.5 }, tool)]);
+    expect(painter.canRedo()).toBe(true);
+    painter.redo();
+    expect(painter.getMarks()).toEqual([
+      createPaintMark({ x: 0.4, y: 0.5 }, tool),
+      createPaintMark({ x: 0.6, y: 0.5 }, tool),
+    ]);
+    painter.destroy();
+  });
+  it('clears redo when painting after undo and reports history state changes', () => {
+    const history = vi.fn();
+    const fresh = setup([], {}, history);
+    fresh.send('pointerdown', { clientX: 400 });
+    fresh.send('pointerup', { clientX: 400 });
+    fresh.send('pointerdown', { clientX: 600 });
+    fresh.send('pointerup', { clientX: 600 });
+    fresh.painter.undo();
+    expect(fresh.painter.canRedo()).toBe(true);
+    fresh.send('pointerdown', { clientX: 700 });
+    fresh.send('pointerup', { clientX: 700 });
+    expect(fresh.painter.canRedo()).toBe(false);
+    expect(fresh.painter.getMarks()).toEqual([
+      createPaintMark({ x: 0.4, y: 0.5 }, tool),
+      createPaintMark({ x: 0.7, y: 0.5 }, tool),
+    ]);
+    expect(history).toHaveBeenLastCalledWith({ canUndo: true, canRedo: false });
+    fresh.painter.destroy();
+  });
+  it('cancels an active stroke on clear without adding undo history', () => {
+    const { painter, send, onChange } = setup();
+    send('pointerdown');
+    painter.clear();
+    send('pointerup');
+    expect(painter.getMarks()).toEqual([]);
+    expect(painter.canUndo()).toBe(false);
+    expect(painter.canRedo()).toBe(false);
+    expect(onChange).toHaveBeenCalledExactlyOnceWith([]);
+    painter.destroy();
+  });
   it('ignores outside and secondary input and uses changed tools for new marks', () => {
     const { painter, send, onChange } = setup();
     send('pointerdown', { clientY: 0 });
     send('pointerdown', { isPrimary: false });
     send('pointerup');
     expect(onChange).not.toHaveBeenCalled();
-    const changed: ToolState = { color: '#72d6ae', texture: 'marker', brushSize: 0.06 };
+    const changed: ToolState = { color: '#72d6ae', texture: 'marker', brushSize: 0.06, opacity: 0.6, weight: 1.2 };
     painter.setTool(changed);
     send('pointerdown');
     send('pointerup', { pointerId: 2 });
