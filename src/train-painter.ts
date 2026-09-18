@@ -7,6 +7,8 @@ export type ToolState = { color: string; texture: TextureId; brushSize: number; 
 // Positions and diameter are normalized; size is a fraction of train width.
 export type PaintMark = Point & { color: string; texture: TextureId; size: number; opacity: number };
 export type CursorPreviewState = { visible: boolean; x: number; y: number; size: number; color: string; opacity: number };
+export type HistoryState = { canUndo: boolean; canRedo: boolean };
+type PaintStroke = PaintMark[];
 
 export function createPaintMark(point: Point, tool: ToolState, pressure = 0): PaintMark {
   const weight = tool.weight ?? 1;
@@ -17,6 +19,9 @@ export function createPaintMark(point: Point, tool: ToolState, pressure = 0): Pa
 export class TrainPainter {
   private readonly context: CanvasRenderingContext2D;
   private readonly marks: PaintMark[] = [];
+  private currentStroke: PaintStroke = [];
+  private undoStack: PaintStroke[] = [];
+  private redoStack: PaintStroke[] = [];
   private activePointer: number | null = null;
   private previous: Point | null = null;
   private tool: ToolState;
@@ -26,12 +31,14 @@ export class TrainPainter {
   constructor(private readonly canvas: HTMLCanvasElement, tool: ToolState,
     private readonly onChange: (marks: PaintMark[]) => void = () => {}, initialMarks: PaintMark[] = [],
     private scenario: PaintScenario = getScenario('train'),
-    private readonly onCursorChange: (state: CursorPreviewState) => void = () => {}) {
+    private readonly onCursorChange: (state: CursorPreviewState) => void = () => {},
+    private readonly onHistoryChange: (state: HistoryState) => void = () => {}) {
     const context = canvas.getContext('2d');
     if (!context) throw new Error('Canvas painting is unavailable in this browser.');
     this.context = context;
     this.tool = { ...tool };
     this.marks.push(...initialMarks.map(mark => ({ ...mark })));
+    this.undoStack = initialMarks.length ? [initialMarks.map(mark => ({ ...mark }))] : [];
     this.resize();
     if (typeof ResizeObserver !== 'undefined') {
       this.resizeObserver = new ResizeObserver(this.handleResize);
@@ -46,7 +53,8 @@ export class TrainPainter {
     canvas.addEventListener('pointerup', this.finish);
     canvas.addEventListener('pointercancel', this.finish);
     canvas.addEventListener('lostpointercapture', this.finish);
-    window.addEventListener('blur', this.cancel);
+    window.addEventListener('blur', this.handleBlur);
+    this.notifyHistoryChange();
   }
 
   setTool(tool: ToolState): void { this.tool = { ...tool }; }
@@ -56,7 +64,35 @@ export class TrainPainter {
     this.scenario = scenario;
     this.marks.length = 0;
     this.marks.push(...marks.map(mark => ({ ...mark })));
+    this.currentStroke = [];
+    this.undoStack = marks.length ? [marks.map(mark => ({ ...mark }))] : [];
+    this.redoStack = [];
     this.resize(true);
+    this.notifyHistoryChange();
+  }
+
+  getMarks(): PaintMark[] { return this.marks.map(mark => ({ ...mark })); }
+
+  canUndo(): boolean { return this.undoStack.length > 0; }
+
+  canRedo(): boolean { return this.redoStack.length > 0; }
+
+  undo(): void {
+    this.cancel();
+    const stroke = this.undoStack.pop();
+    if (!stroke) return;
+    this.redoStack.push(stroke.map(mark => ({ ...mark })));
+    this.replayFromHistory();
+    this.emitChange();
+  }
+
+  redo(): void {
+    this.cancel();
+    const stroke = this.redoStack.pop();
+    if (!stroke) return;
+    this.undoStack.push(stroke.map(mark => ({ ...mark })));
+    this.replayFromHistory();
+    this.emitChange();
   }
 
   private watchResolution = (): void => {
@@ -120,10 +156,12 @@ export class TrainPainter {
 
   clear(): void {
     this.marks.length = 0;
-    const wasActive = this.activePointer !== null;
-    this.cancel();
+    this.cancel(false);
+    this.currentStroke = [];
+    this.undoStack = [];
+    this.redoStack = [];
     this.context.clearRect(0, 0, this.scenario.width, this.scenario.height);
-    if (!wasActive) this.onChange([]);
+    this.emitChange();
   }
 
   private point(event: PointerEvent): Point {
@@ -138,6 +176,7 @@ export class TrainPainter {
     this.canvas.setPointerCapture(event.pointerId);
     this.activePointer = event.pointerId;
     this.previous = point;
+    this.currentStroke = [];
     this.paint(point, event.pressure);
   };
 
@@ -161,7 +200,23 @@ export class TrainPainter {
     if (!isInsidePaintableArea(this.scenario, point)) return;
     const mark = createPaintMark(point, this.tool, pressure);
     this.marks.push(mark);
+    this.currentStroke.push({ ...mark });
     this.render(mark);
+  }
+
+  private replayFromHistory(): void {
+    this.marks.length = 0;
+    this.marks.push(...this.undoStack.flat().map(mark => ({ ...mark })));
+    this.resize(true);
+  }
+
+  private emitChange(): void {
+    this.notifyHistoryChange();
+    this.onChange(this.getMarks());
+  }
+
+  private notifyHistoryChange(): void {
+    this.onHistoryChange({ canUndo: this.canUndo(), canRedo: this.canRedo() });
   }
 
   private render(mark: PaintMark): void {
@@ -203,7 +258,7 @@ export class TrainPainter {
 
   private finish = (event: PointerEvent): void => {
     this.hidePreview();
-    if (event.pointerId === this.activePointer) this.cancel();
+    if (event.pointerId === this.activePointer) this.completeStroke();
   };
 
   private preview = (event: PointerEvent): void => {
@@ -216,14 +271,35 @@ export class TrainPainter {
     this.onCursorChange({ visible: false, x: 0, y: 0, size: 0, color: this.tool.color, opacity: this.tool.opacity });
   };
 
-  private cancel = (): void => {
+  private handleBlur = (): void => { this.cancel(); };
+
+  private cancel = (commit = true): void => {
+    const pointer = this.activePointer;
+    this.hidePreview();
+    if (pointer !== null && this.canvas.hasPointerCapture(pointer)) this.canvas.releasePointerCapture(pointer);
+    if (pointer !== null && commit) {
+      this.completeStroke();
+    } else {
+      this.activePointer = null;
+      this.previous = null;
+      this.currentStroke = [];
+    }
+  };
+
+  private completeStroke(): void {
     const pointer = this.activePointer;
     this.activePointer = null;
     this.previous = null;
-    this.hidePreview();
     if (pointer !== null && this.canvas.hasPointerCapture(pointer)) this.canvas.releasePointerCapture(pointer);
-    if (pointer !== null) this.onChange(this.marks.map(mark => ({ ...mark })));
-  };
+    if (this.currentStroke.length) {
+      this.undoStack.push(this.currentStroke.map(mark => ({ ...mark })));
+      this.redoStack = [];
+      this.currentStroke = [];
+      this.emitChange();
+    } else {
+      this.notifyHistoryChange();
+    }
+  }
 
   destroy(): void {
     this.cancel();
@@ -234,7 +310,7 @@ export class TrainPainter {
     this.canvas.removeEventListener('pointerup', this.finish);
     this.canvas.removeEventListener('pointercancel', this.finish);
     this.canvas.removeEventListener('lostpointercapture', this.finish);
-    window.removeEventListener('blur', this.cancel);
+    window.removeEventListener('blur', this.handleBlur);
     window.removeEventListener('resize', this.handleResize);
     this.resizeObserver?.disconnect();
     this.resolutionQuery?.removeEventListener('change', this.watchResolution);

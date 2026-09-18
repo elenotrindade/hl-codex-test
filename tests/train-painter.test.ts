@@ -4,7 +4,7 @@ import { getScenario } from '../src/scenarios';
 
 const tool: ToolState = { color: '#e2483d', texture: 'solid', brushSize: 0.025, opacity: 0.8, weight: 1 };
 
-function setup(initial = [] as ReturnType<typeof createPaintMark>[], windowProperties = {}) {
+function setup(initial = [] as ReturnType<typeof createPaintMark>[], windowProperties = {}, onHistory = vi.fn()) {
   const context = Object.fromEntries(['scale', 'beginPath', 'rect', 'clip', 'save', 'restore', 'arc',
     'fill', 'stroke', 'moveTo', 'lineTo', 'closePath', 'translate', 'rotate', 'fillRect', 'clearRect']
     .map(name => [name, vi.fn()]));
@@ -16,7 +16,7 @@ function setup(initial = [] as ReturnType<typeof createPaintMark>[], windowPrope
   vi.stubGlobal('window', Object.assign(new EventTarget(), windowProperties));
   const onChange = vi.fn();
   const onCursor = vi.fn();
-  const painter = new TrainPainter(canvas, tool, onChange, initial, undefined, onCursor);
+  const painter = new TrainPainter(canvas, tool, onChange, initial, undefined, onCursor, onHistory);
   const send = (type: string, overrides = {}) => {
     canvas.dispatchEvent(Object.assign(new Event(type), {
       pointerId: 1, isPrimary: true, button: 0, buttons: 1, clientX: 500, clientY: 200, ...overrides,
@@ -187,6 +187,59 @@ describe('paint marks and stroke lifecycle', () => {
     if (ending === 'blur') window.dispatchEvent(new Event('blur')); else send(ending);
     send('pointerup');
     expect(onChange).toHaveBeenCalledExactlyOnceWith([createPaintMark({ x: 0.5, y: 0.5 }, tool)]);
+    painter.destroy();
+  });
+  it('groups marks by stroke and undoes or redoes one stroke at a time', () => {
+    const { painter, send, onChange } = setup();
+    send('pointerdown', { clientX: 400 });
+    send('pointerup', { clientX: 400 });
+    send('pointerdown', { clientX: 600 });
+    send('pointerup', { clientX: 600 });
+    expect(painter.canUndo()).toBe(true);
+    expect(painter.canRedo()).toBe(false);
+    expect(painter.getMarks()).toEqual([
+      createPaintMark({ x: 0.4, y: 0.5 }, tool),
+      createPaintMark({ x: 0.6, y: 0.5 }, tool),
+    ]);
+    painter.undo();
+    expect(painter.getMarks()).toEqual([createPaintMark({ x: 0.4, y: 0.5 }, tool)]);
+    expect(onChange).toHaveBeenLastCalledWith([createPaintMark({ x: 0.4, y: 0.5 }, tool)]);
+    expect(painter.canRedo()).toBe(true);
+    painter.redo();
+    expect(painter.getMarks()).toEqual([
+      createPaintMark({ x: 0.4, y: 0.5 }, tool),
+      createPaintMark({ x: 0.6, y: 0.5 }, tool),
+    ]);
+    painter.destroy();
+  });
+  it('clears redo when painting after undo and reports history state changes', () => {
+    const history = vi.fn();
+    const fresh = setup([], {}, history);
+    fresh.send('pointerdown', { clientX: 400 });
+    fresh.send('pointerup', { clientX: 400 });
+    fresh.send('pointerdown', { clientX: 600 });
+    fresh.send('pointerup', { clientX: 600 });
+    fresh.painter.undo();
+    expect(fresh.painter.canRedo()).toBe(true);
+    fresh.send('pointerdown', { clientX: 700 });
+    fresh.send('pointerup', { clientX: 700 });
+    expect(fresh.painter.canRedo()).toBe(false);
+    expect(fresh.painter.getMarks()).toEqual([
+      createPaintMark({ x: 0.4, y: 0.5 }, tool),
+      createPaintMark({ x: 0.7, y: 0.5 }, tool),
+    ]);
+    expect(history).toHaveBeenLastCalledWith({ canUndo: true, canRedo: false });
+    fresh.painter.destroy();
+  });
+  it('cancels an active stroke on clear without adding undo history', () => {
+    const { painter, send, onChange } = setup();
+    send('pointerdown');
+    painter.clear();
+    send('pointerup');
+    expect(painter.getMarks()).toEqual([]);
+    expect(painter.canUndo()).toBe(false);
+    expect(painter.canRedo()).toBe(false);
+    expect(onChange).toHaveBeenCalledExactlyOnceWith([]);
     painter.destroy();
   });
   it('ignores outside and secondary input and uses changed tools for new marks', () => {

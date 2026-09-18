@@ -54,8 +54,12 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
         <div class="textures" role="group" aria-label="Paint texture">
           ${TEXTURES.map(texture => `<button type="button" data-texture="${texture}" aria-pressed="${texture === 'solid'}">${texture}</button>`).join('')}
         </div>
+        <div class="history-actions" role="group" aria-label="Stroke history">
+          <button type="button" id="undo-stroke" disabled aria-disabled="true">Undo stroke</button>
+          <button type="button" id="redo-stroke" disabled aria-disabled="true">Redo stroke</button>
+        </div>
         <button type="button" id="clear-artwork" aria-describedby="clear-help">Clear artwork</button>
-        <p id="clear-help" class="tool-note">Clear removes all paint. There is no undo.</p>
+        <p id="clear-help" class="tool-note">Undo and redo work by complete stroke. Clear removes all paint.</p>
         <p id="save-status" role="status" aria-live="polite"></p>
       </aside>
     <section class="display-panel" aria-labelledby="display-heading">
@@ -77,6 +81,8 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
 
 const canvas = document.querySelector<HTMLCanvasElement>('canvas')!;
 const cursor = document.querySelector<HTMLDivElement>('.brush-cursor')!;
+const undoButton = document.querySelector<HTMLButtonElement>('#undo-stroke')!;
+const redoButton = document.querySelector<HTMLButtonElement>('#redo-stroke')!;
 const saved = loadArtwork(undefined, activeScenario);
 const status = document.querySelector<HTMLParagraphElement>('#save-status')!;
 status.textContent = {
@@ -85,6 +91,12 @@ status.textContent = {
   unavailable: 'Local storage unavailable. Paint may be lost on reload.',
 }[saved.status];
 status.dataset.error = String(saved.status === 'invalid' || saved.status === 'unavailable');
+function updateHistoryControls(state: { canUndo: boolean; canRedo: boolean }): void {
+  undoButton.disabled = !state.canUndo;
+  redoButton.disabled = !state.canRedo;
+  undoButton.setAttribute('aria-disabled', String(!state.canUndo));
+  redoButton.setAttribute('aria-disabled', String(!state.canRedo));
+}
 const painter = new TrainPainter(canvas, tool, marks => {
   const success = saveArtwork({ marks, updatedAt: new Date().toISOString() }, undefined, activeScenario);
   status.textContent = success
@@ -99,7 +111,9 @@ const painter = new TrainPainter(canvas, tool, marks => {
   cursor.style.setProperty('--cursor-size', `${state.size * activeScenario.width}px`);
   cursor.style.setProperty('--cursor-color', state.color);
   cursor.style.setProperty('--cursor-opacity', String(state.opacity));
-});
+}, updateHistoryControls);
+undoButton.addEventListener('click', () => painter.undo());
+redoButton.addEventListener('click', () => painter.redo());
 document.querySelector<HTMLButtonElement>('#clear-artwork')!.addEventListener('click', () => painter.clear());
 document.querySelectorAll<HTMLButtonElement>('[data-scenario]').forEach(button => {
   button.addEventListener('click', () => {

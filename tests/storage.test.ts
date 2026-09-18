@@ -26,6 +26,13 @@ describe('artwork storage', () => {
     expect(saveArtwork(cleared, storage)).toBe(true);
     expect(loadArtwork(storage).snapshot).toEqual(cleared);
   });
+  it('keeps accepting existing flat mark snapshots without stroke history metadata', () => {
+    const rawFlatSnapshot = JSON.stringify({ marks: [snapshot.marks[0]], updatedAt: snapshot.updatedAt });
+    expect(loadArtwork(memory(rawFlatSnapshot))).toEqual({
+      snapshot: { marks: [snapshot.marks[0]], updatedAt: snapshot.updatedAt },
+      status: 'loaded',
+    });
+  });
   it.each(['{', 'null', '[]', '{}', JSON.stringify({ ...snapshot, updatedAt: 'no date' }),
     JSON.stringify({ ...snapshot, marks: {} }),
     ...[null, { ...snapshot.marks[0], x: 2 }, { ...snapshot.marks[0], y: 0.1 },
