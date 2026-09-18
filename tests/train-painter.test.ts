@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createPaintMark, TEXTURES, TrainPainter, type ToolState } from '../src/train-painter';
+import { getScenario } from '../src/scenarios';
 
 const tool: ToolState = { color: '#e2483d', texture: 'solid', brushSize: 0.025 };
 
@@ -112,6 +113,41 @@ describe('gallery snapshots', () => {
       set src(_value: string) { this.onerror(); }
     });
     await expect(painter.createSnapshot()).rejects.toThrow('could not load');
+    painter.destroy();
+  });
+});
+
+describe('scenario-driven painting', () => {
+  it('switches clipping and hit testing to the active scenario', () => {
+    const { painter, context, send, onChange } = setup();
+    context.rect.mockClear();
+    painter.setScenario(getScenario('wall'));
+    expect(context.rect).toHaveBeenCalledWith(80, 88, 840, 200);
+    send('pointerdown', { clientX: 500, clientY: 110 });
+    send('pointerup');
+    expect(onChange).toHaveBeenCalledWith([createPaintMark({ x: 0.5, y: 0.275 }, tool)]);
+    onChange.mockClear();
+    send('pointerdown', { clientX: 500, clientY: 340 });
+    send('pointerup');
+    expect(onChange).not.toHaveBeenCalled();
+    painter.destroy();
+  });
+
+  it('uses the active scenario template and background for snapshots', async () => {
+    const { painter } = setup();
+    painter.setScenario(getScenario('vehicle'));
+    const overlayContext = { drawImage: vi.fn() };
+    const outputContext = { drawImage: vi.fn(), fillRect: vi.fn(), fillStyle: '' };
+    const overlay = { getContext: () => overlayContext, width: 0, height: 0 };
+    const output = { getContext: () => outputContext, toDataURL: vi.fn(() => 'data:image/png;base64,Yg=='), width: 0, height: 0 };
+    vi.stubGlobal('document', { createElement: vi.fn().mockReturnValueOnce(overlay).mockReturnValueOnce(output) });
+    let image: { onload: () => void; src: string };
+    vi.stubGlobal('Image', class { constructor() { image = this as unknown as typeof image; } });
+    const result = painter.createSnapshot();
+    expect(decodeURIComponent(image!.src)).toContain('Boxy street van');
+    image!.onload();
+    await expect(result).resolves.toBe('data:image/png;base64,Yg==');
+    expect(outputContext.fillStyle).toBe('#d7d0be');
     painter.destroy();
   });
 });

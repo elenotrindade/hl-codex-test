@@ -11,7 +11,7 @@ export const PAINTABLE_REGIONS = [
 ] as const;
 
 export function isInsidePaintableTrainArea(point: Point): boolean {
-  return PAINTABLE_REGIONS.some(region =>
+  return Number.isFinite(point.x) && Number.isFinite(point.y) && PAINTABLE_REGIONS.some(region =>
     point.x >= region.x && point.x <= region.x + region.width &&
     point.y >= region.y && point.y <= region.y + region.height,
   );

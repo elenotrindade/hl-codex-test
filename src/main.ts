@@ -1,26 +1,30 @@
 import './styles.css';
-import { trainTemplate } from './train-template';
 import { TrainPainter, TEXTURES, type TextureId, type ToolState } from './train-painter';
 import { loadArtwork, saveArtwork, loadGallery, saveGallery } from './storage';
 import { seededGallery, publishArtwork, upvote, rankGallery } from './gallery';
+import { getScenario, scenarios, type PaintScenario } from './scenarios';
 
 const colors = [
   ['Signal red', '#e2483d'], ['Amber', '#f1aa2d'], ['Chalk', '#fff4db'],
   ['Ink', '#171513'], ['Electric blue', '#2588ed'], ['Mint', '#72d6ae'],
 ] as const;
 const tool: ToolState = { color: colors[0][1], texture: 'solid', brushSize: 0.025 };
+let activeScenario: PaintScenario = getScenario('train');
 document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   <a class="skip-link" href="#workshop">Skip to the workshop</a>
   <main>
-    <header><p class="eyebrow">YARD / OPEN CANVAS / NO. 001</p>
+    <div class="yard-strip">YARD / OPEN CANVAS / NO. 001</div>
+    <header>
       <h1>Leave your <em>mark.</em></h1>
-      <p>One train. Your colors. Pick a shade and drag across the blue body panels.</p>
     </header>
-    <section id="workshop" class="workshop" aria-label="Train painting workshop" tabindex="-1">
+    <section id="workshop" class="workshop" aria-label="Street painting workshop" tabindex="-1">
       <div class="stage-panel">
-        <div class="stage-heading"><h2>01 / Make it yours</h2><span>CAR 001</span></div>
-        <div class="train-stage">${trainTemplate()}<canvas aria-label="Graffiti painting surface" aria-describedby="paint-help">Canvas support is required to paint.</canvas></div>
-        <p id="paint-help">Drag with a mouse, pen, or finger. Windows and wheels stay clean. Painting requires pointer input; use Tab to reach tools and display controls.</p>
+        <div class="stage-heading"><h2>01 / Make it yours</h2><span id="scenario-stamp">TRAIN</span></div>
+        <div class="scenario-tabs" role="group" aria-label="Street scenario">
+          ${scenarios.map(scenario => `<button type="button" data-scenario="${scenario.id}" aria-pressed="${scenario.id === activeScenario.id}">${scenario.label}</button>`).join('')}
+        </div>
+        <div class="paint-stage" aria-live="polite">${activeScenario.template()}<canvas aria-label="${activeScenario.ariaLabel}" aria-describedby="paint-help">Canvas support is required to paint.</canvas></div>
+        <p id="paint-help">Drag with a mouse, pen, or finger. Paint stays inside the active street surface.</p>
         <p class="stage-stamp" aria-hidden="true">YOUR CITY. YOUR COLORS.</p>
       </div>
       <aside class="tools" aria-label="Painting tools">
@@ -55,22 +59,40 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   </main>`;
 
 const canvas = document.querySelector<HTMLCanvasElement>('canvas')!;
-const saved = loadArtwork();
+const saved = loadArtwork(undefined, activeScenario);
 const status = document.querySelector<HTMLParagraphElement>('#save-status')!;
 status.textContent = {
   loaded: 'Latest artwork restored.', missing: 'Ready for your first mark.',
-  invalid: 'Saved artwork could not be read. Starting with an empty train.',
+  invalid: 'Saved artwork could not be read. Starting with an empty scene.',
   unavailable: 'Local storage unavailable. Paint may be lost on reload.',
 }[saved.status];
 status.dataset.error = String(saved.status === 'invalid' || saved.status === 'unavailable');
 const painter = new TrainPainter(canvas, tool, marks => {
-  const success = saveArtwork({ marks, updatedAt: new Date().toISOString() });
+  const success = saveArtwork({ marks, updatedAt: new Date().toISOString() }, undefined, activeScenario);
   status.textContent = success
-    ? (marks.length ? 'Artwork saved in this browser.' : 'Empty train saved in this browser.')
+    ? (marks.length ? `${activeScenario.label} artwork saved in this browser.` : `Empty ${activeScenario.label.toLowerCase()} scene saved in this browser.`)
     : 'Could not save. Changes may be lost on reload.';
   status.dataset.error = String(!success);
-}, saved.snapshot?.marks ?? []);
+}, saved.snapshot?.marks ?? [], activeScenario);
 document.querySelector<HTMLButtonElement>('#clear-artwork')!.addEventListener('click', () => painter.clear());
+document.querySelectorAll<HTMLButtonElement>('[data-scenario]').forEach(button => {
+  button.addEventListener('click', () => {
+    activeScenario = getScenario(button.dataset.scenario as typeof activeScenario.id);
+    document.querySelectorAll<HTMLButtonElement>('[data-scenario]').forEach(tab => tab.setAttribute('aria-pressed', String(tab === button)));
+    document.querySelector<HTMLSpanElement>('#scenario-stamp')!.textContent = activeScenario.label.toUpperCase();
+    const stage = document.querySelector<HTMLDivElement>('.paint-stage')!;
+    const currentCanvas = stage.querySelector('canvas')!;
+    stage.innerHTML = `${activeScenario.template()}`;
+    stage.append(currentCanvas);
+    currentCanvas.setAttribute('aria-label', activeScenario.ariaLabel);
+    const scenarioSaved = loadArtwork(undefined, activeScenario);
+    painter.setScenario(activeScenario, scenarioSaved.snapshot?.marks ?? []);
+    status.textContent = scenarioSaved.status === 'loaded'
+      ? `${activeScenario.label} artwork restored.`
+      : `Ready to paint the ${activeScenario.label.toLowerCase()}.`;
+    status.dataset.error = 'false';
+  });
+});
 document.querySelectorAll<HTMLButtonElement>('[data-texture]').forEach(button => {
   button.addEventListener('click', () => {
     tool.texture = button.dataset.texture as TextureId;
@@ -158,14 +180,14 @@ publish.addEventListener('click', async () => {
   publish.disabled = true;
   publish.setAttribute('aria-busy', 'true');
   galleryStatus.dataset.error = 'false';
-  galleryStatus.textContent = 'Preparing your train snapshot...';
+  galleryStatus.textContent = `Preparing your ${activeScenario.label.toLowerCase()} snapshot...`;
   try {
     const image = await painter.createSnapshot();
     entries = publishArtwork(entries, image);
     renderGallery();
-    persistGallery('Train added to the mock display.');
+    persistGallery(`${activeScenario.label} added to the mock display.`);
   } catch {
-    galleryStatus.textContent = 'Could not create the train snapshot. Nothing was published; please try again.';
+    galleryStatus.textContent = `Could not create the ${activeScenario.label.toLowerCase()} snapshot. Nothing was published; please try again.`;
     galleryStatus.dataset.error = 'true';
   } finally {
     publish.disabled = false;

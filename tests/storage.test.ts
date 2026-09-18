@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { ARTWORK_KEY, loadArtwork, saveArtwork, type ArtworkSnapshot } from '../src/storage';
 import { TEXTURES } from '../src/train-painter';
+import { getScenario } from '../src/scenarios';
 
 const snapshot: ArtworkSnapshot = {
   marks: TEXTURES.map(texture => ({ x: 0.5, y: 0.5, size: 0.025, color: '#e2483d', texture })),
@@ -46,5 +47,15 @@ describe('artwork storage', () => {
     const storage = memory(JSON.stringify(snapshot));
     expect(saveArtwork({ ...snapshot, marks: [{ ...snapshot.marks[0], size: NaN }] }, storage)).toBe(false);
     expect(loadArtwork(storage).snapshot).toEqual(snapshot);
+  });
+  it('validates marks against the requested scenario geometry', () => {
+    const wallSnapshot: ArtworkSnapshot = {
+      marks: [{ x: 0.5, y: 0.3, size: 0.025, color: '#e2483d', texture: 'solid' }],
+      updatedAt: '2026-09-17T12:00:00.000Z',
+    };
+    const storage = memory();
+    expect(saveArtwork(wallSnapshot, storage, getScenario('wall'))).toBe(true);
+    expect(loadArtwork(storage, getScenario('wall'))).toEqual({ snapshot: wallSnapshot, status: 'loaded' });
+    expect(loadArtwork(storage, getScenario('train'))).toEqual({ snapshot: null, status: 'invalid' });
   });
 });

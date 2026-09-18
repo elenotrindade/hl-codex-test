@@ -1,4 +1,5 @@
-import { isInsidePaintableTrainArea, PAINTABLE_REGIONS, TRAIN_HEIGHT, TRAIN_WIDTH, trainTemplate, type Point } from './train-template';
+import { getScenario, isInsidePaintableArea, type PaintScenario } from './scenarios';
+import { type Point } from './train-template';
 
 export const TEXTURES = ['solid', 'spray', 'sticker', 'marker'] as const;
 export type TextureId = typeof TEXTURES[number];
@@ -20,7 +21,8 @@ export class TrainPainter {
   private resolutionQuery?: MediaQueryList;
 
   constructor(private readonly canvas: HTMLCanvasElement, tool: ToolState,
-    private readonly onChange: (marks: PaintMark[]) => void = () => {}, initialMarks: PaintMark[] = []) {
+    private readonly onChange: (marks: PaintMark[]) => void = () => {}, initialMarks: PaintMark[] = [],
+    private scenario: PaintScenario = getScenario('train')) {
     const context = canvas.getContext('2d');
     if (!context) throw new Error('Canvas painting is unavailable in this browser.');
     this.context = context;
@@ -28,10 +30,10 @@ export class TrainPainter {
     this.marks.push(...initialMarks.map(mark => ({ ...mark })));
     this.resize();
     if (typeof ResizeObserver !== 'undefined') {
-      this.resizeObserver = new ResizeObserver(this.resize);
+      this.resizeObserver = new ResizeObserver(this.handleResize);
       this.resizeObserver.observe(canvas);
     }
-    window.addEventListener('resize', this.resize);
+    window.addEventListener('resize', this.handleResize);
     this.watchResolution();
     canvas.addEventListener('pointerdown', this.start);
     canvas.addEventListener('pointermove', this.move);
@@ -43,6 +45,14 @@ export class TrainPainter {
 
   setTool(tool: ToolState): void { this.tool = { ...tool }; }
 
+  setScenario(scenario: PaintScenario, marks: PaintMark[] = []): void {
+    this.cancel();
+    this.scenario = scenario;
+    this.marks.length = 0;
+    this.marks.push(...marks.map(mark => ({ ...mark })));
+    this.resize(true);
+  }
+
   private watchResolution = (): void => {
     this.resolutionQuery?.removeEventListener('change', this.watchResolution);
     this.resize();
@@ -52,21 +62,23 @@ export class TrainPainter {
     }
   };
 
-  private resize = (): void => {
+  private handleResize = (): void => { this.resize(); };
+
+  private resize = (force = false): void => {
     const bounds = this.canvas.getBoundingClientRect();
     if (bounds.width <= 0 || bounds.height <= 0) return;
     const ratio = Math.min(window.devicePixelRatio || 1, 3);
     const width = Math.max(1, Math.round(bounds.width * ratio));
     const height = Math.max(1, Math.round(bounds.height * ratio));
-    if (this.canvas.width === width && this.canvas.height === height) return;
+    if (!force && this.canvas.width === width && this.canvas.height === height) return;
     // Resetting the backing store clears its transform and clip; replay normalized marks.
     this.canvas.width = width;
     this.canvas.height = height;
-    this.context.scale(width / TRAIN_WIDTH, height / TRAIN_HEIGHT);
+    this.context.scale(width / this.scenario.width, height / this.scenario.height);
     this.context.beginPath();
-    for (const region of PAINTABLE_REGIONS) {
-      this.context.rect(region.x * TRAIN_WIDTH, region.y * TRAIN_HEIGHT,
-        region.width * TRAIN_WIDTH, region.height * TRAIN_HEIGHT);
+    for (const region of this.scenario.paintableRegions) {
+      this.context.rect(region.x * this.scenario.width, region.y * this.scenario.height,
+        region.width * this.scenario.width, region.height * this.scenario.height);
     }
     this.context.clip();
     this.previous = null;
@@ -75,27 +87,27 @@ export class TrainPainter {
 
   async createSnapshot(): Promise<string> {
     const overlay = document.createElement('canvas');
-    overlay.width = TRAIN_WIDTH;
-    overlay.height = TRAIN_HEIGHT;
+    overlay.width = this.scenario.width;
+    overlay.height = this.scenario.height;
     const overlayContext = overlay.getContext('2d');
     if (!overlayContext) throw new Error('Snapshot canvas unavailable');
     // Freeze the paint before loading the SVG so later strokes cannot alter this submission.
-    overlayContext.drawImage(this.canvas, 0, 0, TRAIN_WIDTH, TRAIN_HEIGHT);
-    const train = new Image();
+    overlayContext.drawImage(this.canvas, 0, 0, this.scenario.width, this.scenario.height);
+    const base = new Image();
     await new Promise<void>((resolve, reject) => {
-      train.onload = () => resolve();
-      train.onerror = () => reject(new Error('Train image could not load'));
-      train.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(trainTemplate().replace('<svg ',
-        `<svg width="${TRAIN_WIDTH}" height="${TRAIN_HEIGHT}" `))}`;
+      base.onload = () => resolve();
+      base.onerror = () => reject(new Error(`${this.scenario.label} image could not load`));
+      base.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(this.scenario.template().replace('<svg ',
+        `<svg width="${this.scenario.width}" height="${this.scenario.height}" `))}`;
     });
     const snapshot = document.createElement('canvas');
-    snapshot.width = TRAIN_WIDTH;
-    snapshot.height = TRAIN_HEIGHT;
+    snapshot.width = this.scenario.width;
+    snapshot.height = this.scenario.height;
     const context = snapshot.getContext('2d');
     if (!context) throw new Error('Snapshot canvas unavailable');
-    context.fillStyle = '#ebe1c9';
-    context.fillRect(0, 0, TRAIN_WIDTH, TRAIN_HEIGHT);
-    context.drawImage(train, 0, 0, TRAIN_WIDTH, TRAIN_HEIGHT);
+    context.fillStyle = this.scenario.snapshotBackground;
+    context.fillRect(0, 0, this.scenario.width, this.scenario.height);
+    context.drawImage(base, 0, 0, this.scenario.width, this.scenario.height);
     context.drawImage(overlay, 0, 0);
     return snapshot.toDataURL('image/png');
   }
@@ -104,7 +116,7 @@ export class TrainPainter {
     this.marks.length = 0;
     const wasActive = this.activePointer !== null;
     this.cancel();
-    this.context.clearRect(0, 0, TRAIN_WIDTH, TRAIN_HEIGHT);
+    this.context.clearRect(0, 0, this.scenario.width, this.scenario.height);
     if (!wasActive) this.onChange([]);
   }
 
@@ -116,7 +128,7 @@ export class TrainPainter {
   private start = (event: PointerEvent): void => {
     if (this.activePointer !== null || !event.isPrimary || event.button !== 0) return;
     const point = this.point(event);
-    if (!isInsidePaintableTrainArea(point)) return;
+    if (!isInsidePaintableArea(this.scenario, point)) return;
     this.canvas.setPointerCapture(event.pointerId);
     this.activePointer = event.pointerId;
     this.previous = point;
@@ -127,10 +139,10 @@ export class TrainPainter {
     if (event.pointerId !== this.activePointer) return;
     if (event.buttons === 0) { this.cancel(); return; }
     const point = this.point(event);
-    if (!isInsidePaintableTrainArea(point)) { this.previous = null; return; }
+    if (!isInsidePaintableArea(this.scenario, point)) { this.previous = null; return; }
     const previous = this.previous ?? point;
-    const distance = Math.hypot((point.x - previous.x) * TRAIN_WIDTH, (point.y - previous.y) * TRAIN_HEIGHT);
-    const steps = Math.max(1, Math.ceil(distance / (this.tool.brushSize * TRAIN_WIDTH / 4)));
+    const distance = Math.hypot((point.x - previous.x) * this.scenario.width, (point.y - previous.y) * this.scenario.height);
+    const steps = Math.max(1, Math.ceil(distance / (this.tool.brushSize * this.scenario.width / 4)));
     for (let step = 1; step <= steps; step++) {
       this.paint({ x: previous.x + (point.x - previous.x) * step / steps,
         y: previous.y + (point.y - previous.y) * step / steps });
@@ -139,7 +151,7 @@ export class TrainPainter {
   };
 
   private paint(point: Point): void {
-    if (!isInsidePaintableTrainArea(point)) return;
+    if (!isInsidePaintableArea(this.scenario, point)) return;
     const mark = createPaintMark(point, this.tool);
     this.marks.push(mark);
     this.render(mark);
@@ -147,9 +159,9 @@ export class TrainPainter {
 
   private render(mark: PaintMark): void {
     const ctx = this.context;
-    const x = mark.x * TRAIN_WIDTH;
-    const y = mark.y * TRAIN_HEIGHT;
-    const radius = mark.size * TRAIN_WIDTH / 2;
+    const x = mark.x * this.scenario.width;
+    const y = mark.y * this.scenario.height;
+    const radius = mark.size * this.scenario.width / 2;
     ctx.save();
     ctx.fillStyle = mark.color;
     if (mark.texture === 'spray') {
@@ -215,7 +227,7 @@ export class TrainPainter {
     this.canvas.removeEventListener('pointercancel', this.finish);
     this.canvas.removeEventListener('lostpointercapture', this.finish);
     window.removeEventListener('blur', this.cancel);
-    window.removeEventListener('resize', this.resize);
+    window.removeEventListener('resize', this.handleResize);
     this.resizeObserver?.disconnect();
     this.resolutionQuery?.removeEventListener('change', this.watchResolution);
   }
