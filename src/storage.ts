@@ -14,7 +14,8 @@ function isMark(value: unknown, scenario: PaintScenario): value is PaintMark {
   const mark = value as PaintMark;
   return Number.isFinite(mark.x) && Number.isFinite(mark.y) && isInsidePaintableArea(scenario, mark) &&
     typeof mark.color === 'string' && /^#[0-9a-f]{6}$/i.test(mark.color) &&
-    TEXTURES.includes(mark.texture) && Number.isFinite(mark.size) && mark.size >= 0.006 && mark.size <= 0.06;
+    TEXTURES.includes(mark.texture) && Number.isFinite(mark.size) && mark.size >= 0.003 && mark.size <= 0.12 &&
+    (mark.opacity === undefined || Number.isFinite(mark.opacity) && mark.opacity >= 0.05 && mark.opacity <= 1);
 }
 
 function isSnapshot(value: unknown, scenario: PaintScenario): value is ArtworkSnapshot {

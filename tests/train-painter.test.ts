@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createPaintMark, TEXTURES, TrainPainter, type ToolState } from '../src/train-painter';
 import { getScenario } from '../src/scenarios';
 
-const tool: ToolState = { color: '#e2483d', texture: 'solid', brushSize: 0.025 };
+const tool: ToolState = { color: '#e2483d', texture: 'solid', brushSize: 0.025, opacity: 0.8, weight: 1 };
 
 function setup(initial = [] as ReturnType<typeof createPaintMark>[], windowProperties = {}) {
   const context = Object.fromEntries(['scale', 'beginPath', 'rect', 'clip', 'save', 'restore', 'arc',
@@ -15,13 +15,14 @@ function setup(initial = [] as ReturnType<typeof createPaintMark>[], windowPrope
   canvas.hasPointerCapture = () => false;
   vi.stubGlobal('window', Object.assign(new EventTarget(), windowProperties));
   const onChange = vi.fn();
-  const painter = new TrainPainter(canvas, tool, onChange, initial);
+  const onCursor = vi.fn();
+  const painter = new TrainPainter(canvas, tool, onChange, initial, undefined, onCursor);
   const send = (type: string, overrides = {}) => {
     canvas.dispatchEvent(Object.assign(new Event(type), {
       pointerId: 1, isPrimary: true, button: 0, buttons: 1, clientX: 500, clientY: 200, ...overrides,
     }));
   };
-  return { painter, canvas, context, onChange, send };
+  return { painter, canvas, context, onChange, onCursor, send };
 }
 afterEach(() => vi.unstubAllGlobals());
 
@@ -159,7 +160,25 @@ describe('paint marks and stroke lifecycle', () => {
     const mark = createPaintMark(point, current);
     current.color = '#ffffff';
     point.x = 0;
-    expect(mark).toEqual({ x: 0.5, y: 0.6, size: 0.025, color: '#e2483d', texture });
+    expect(mark).toEqual({ x: 0.5, y: 0.6, size: 0.025, opacity: 0.8, color: '#e2483d', texture });
+  });
+  it('stores deterministic pressure-adjusted size and opacity', () => {
+    const mark = createPaintMark({ x: 0.5, y: 0.5 }, { ...tool, brushSize: 0.02, weight: 1.5, opacity: 0.35 }, 0.5);
+    expect(mark).toMatchObject({ x: 0.5, y: 0.5, color: '#e2483d', texture: 'solid', opacity: 0.35 });
+    expect(mark.size).toBeCloseTo(0.028);
+  });
+  it('emits clipped cursor preview state without saving artwork', () => {
+    const { painter, send, onChange, onCursor } = setup();
+    send('pointerenter', { pressure: 0.5 });
+    const activePreview = onCursor.mock.lastCall![0];
+    expect(activePreview).toMatchObject({ visible: true, x: 0.5, y: 0.5, color: '#e2483d', opacity: 0.8 });
+    expect(activePreview.size).toBeCloseTo(0.02875);
+    send('pointermove', { clientY: 0 });
+    expect(onCursor).toHaveBeenLastCalledWith({ visible: false, x: 0.5, y: 0, size: 0.025, color: '#e2483d', opacity: 0.8 });
+    send('pointerleave');
+    expect(onCursor).toHaveBeenLastCalledWith({ visible: false, x: 0, y: 0, size: 0, color: '#e2483d', opacity: 0.8 });
+    expect(onChange).not.toHaveBeenCalled();
+    painter.destroy();
   });
   it.each(['pointerup', 'pointercancel', 'lostpointercapture', 'blur'])('saves once on %s', ending => {
     const { painter, send, onChange } = setup();
@@ -176,7 +195,7 @@ describe('paint marks and stroke lifecycle', () => {
     send('pointerdown', { isPrimary: false });
     send('pointerup');
     expect(onChange).not.toHaveBeenCalled();
-    const changed: ToolState = { color: '#72d6ae', texture: 'marker', brushSize: 0.06 };
+    const changed: ToolState = { color: '#72d6ae', texture: 'marker', brushSize: 0.06, opacity: 0.6, weight: 1.2 };
     painter.setTool(changed);
     send('pointerdown');
     send('pointerup', { pointerId: 2 });

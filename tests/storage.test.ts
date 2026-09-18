@@ -4,7 +4,7 @@ import { TEXTURES } from '../src/train-painter';
 import { getScenario } from '../src/scenarios';
 
 const snapshot: ArtworkSnapshot = {
-  marks: TEXTURES.map(texture => ({ x: 0.5, y: 0.5, size: 0.025, color: '#e2483d', texture })),
+  marks: TEXTURES.map(texture => ({ x: 0.5, y: 0.5, size: 0.025, opacity: 0.8, color: '#e2483d', texture })),
   updatedAt: '2026-09-17T12:00:00.000Z',
 };
 function memory(raw: string | null = null) {
@@ -50,7 +50,7 @@ describe('artwork storage', () => {
   });
   it('validates marks against the requested scenario geometry', () => {
     const wallSnapshot: ArtworkSnapshot = {
-      marks: [{ x: 0.5, y: 0.3, size: 0.025, color: '#e2483d', texture: 'solid' }],
+      marks: [{ x: 0.5, y: 0.3, size: 0.025, opacity: 0.8, color: '#e2483d', texture: 'solid' }],
       updatedAt: '2026-09-17T12:00:00.000Z',
     };
     const storage = memory();
