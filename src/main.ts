@@ -10,42 +10,46 @@ const colors = [
 ] as const;
 const tool: ToolState = { color: colors[0][1], texture: 'solid', brushSize: 0.025 };
 document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
+  <a class="skip-link" href="#workshop">Skip to the workshop</a>
   <main>
     <header><p class="eyebrow">YARD / OPEN CANVAS / NO. 001</p>
       <h1>Leave your <em>mark.</em></h1>
       <p>One train. Your colors. Pick a shade and drag across the blue body panels.</p>
     </header>
-    <section class="workshop" aria-label="Train painting workshop">
+    <section id="workshop" class="workshop" aria-label="Train painting workshop" tabindex="-1">
+      <div class="stage-panel">
+        <div class="stage-heading"><h2>01 / Make it yours</h2><span>CAR 001</span></div>
+        <div class="train-stage">${trainTemplate()}<canvas aria-label="Graffiti painting surface" aria-describedby="paint-help">Canvas support is required to paint.</canvas></div>
+        <p id="paint-help">Drag with a mouse, pen, or finger. Windows and wheels stay clean. Painting requires pointer input; use Tab to reach tools and display controls.</p>
+        <p class="stage-stamp" aria-hidden="true">YOUR CITY. YOUR COLORS.</p>
+      </div>
       <aside class="tools" aria-label="Painting tools">
-        <h2>01 / Pick your paint</h2>
+        <h2>02 / Pick your paint</h2>
         <div class="swatches" role="group" aria-label="Paint color">
           ${colors.map(([name, color], i) => `<button type="button" class="swatch" style="--swatch:${color}" data-color="${color}" aria-label="${name}" aria-pressed="${i === 0}" title="${name}"></button>`).join('')}
         </div>
         <label for="brush-size">Brush size <output id="size-value" for="brush-size">25</output></label>
-        <input id="brush-size" type="range" min="6" max="60" value="25" />
+        <input id="brush-size" type="range" min="6" max="60" value="25" aria-valuetext="25 train units" />
         <div class="textures" role="group" aria-label="Paint texture">
           ${TEXTURES.map(texture => `<button type="button" data-texture="${texture}" aria-pressed="${texture === 'solid'}">${texture}</button>`).join('')}
         </div>
-        <button type="button" id="clear-artwork">Clear artwork</button>
-        <p class="tool-note">Clear removes all paint. There is no undo.</p>
+        <button type="button" id="clear-artwork" aria-describedby="clear-help">Clear artwork</button>
+        <p id="clear-help" class="tool-note">Clear removes all paint. There is no undo.</p>
         <p id="save-status" role="status" aria-live="polite"></p>
       </aside>
-      <div class="stage-panel">
-        <div class="stage-heading"><h2>02 / Make it yours</h2><span>CAR 001</span></div>
-        <div class="train-stage">${trainTemplate()}<canvas aria-label="Graffiti painting surface" aria-describedby="paint-help">Canvas support is required to paint.</canvas></div>
-        <p id="paint-help">Drag with a mouse, pen, or finger. Windows and wheels stay clean.</p>
-      </div>
-    </section>
     <section class="display-panel" aria-labelledby="display-heading">
       <h2 id="display-heading">03 / On display</h2>
       <p>A mock public feed. Submissions and votes stay in this browser only. Nothing is uploaded.</p>
       <button type="button" id="publish-artwork">Put on display</button>
       <p id="gallery-status" role="status" aria-live="polite"></p>
       <div id="gallery-feed" class="gallery-feed"></div>
-      <h2 class="ranking-heading">Yard ranking / Most upvoted</h2>
+      <p id="share-status" role="status" aria-live="polite"></p>
+    </section>
+    </section>
+    <section class="ranking-panel" aria-labelledby="ranking-heading">
+      <h2 id="ranking-heading" class="ranking-heading">Yard ranking / Most upvoted</h2>
       <p>Demo voting: vote as often as you like. Ties use entry ID order.</p>
       <ol id="gallery-ranking"></ol>
-      <p id="share-status" role="status" aria-live="polite"></p>
     </section>
     <footer>Saved automatically after each stroke, in this browser only.</footer>
   </main>`;
@@ -58,6 +62,7 @@ status.textContent = {
   invalid: 'Saved artwork could not be read. Starting with an empty train.',
   unavailable: 'Local storage unavailable. Paint may be lost on reload.',
 }[saved.status];
+status.dataset.error = String(saved.status === 'invalid' || saved.status === 'unavailable');
 const painter = new TrainPainter(canvas, tool, marks => {
   const success = saveArtwork({ marks, updatedAt: new Date().toISOString() });
   status.textContent = success
@@ -85,6 +90,7 @@ document.querySelector<HTMLInputElement>('#brush-size')!.addEventListener('input
   tool.brushSize = value / 1000;
   painter.setTool(tool);
   document.querySelector<HTMLOutputElement>('#size-value')!.value = String(value);
+  (event.target as HTMLInputElement).setAttribute('aria-valuetext', `${value} train units`);
 });
 const storedGallery = loadGallery();
 let entries = storedGallery.entries ?? seededGallery();
@@ -97,6 +103,7 @@ galleryStatus.textContent = {
   invalid: 'Saved display could not be read. Showing built-in examples.',
   unavailable: 'Local storage unavailable. Display changes will last only for this session.',
 }[storedGallery.status];
+galleryStatus.dataset.error = String(storedGallery.status === 'invalid' || storedGallery.status === 'unavailable');
 
 function persistGallery(message: string): void {
   const success = saveGallery(entries);
@@ -149,6 +156,8 @@ renderGallery();
 const publish = document.querySelector<HTMLButtonElement>('#publish-artwork')!;
 publish.addEventListener('click', async () => {
   publish.disabled = true;
+  publish.setAttribute('aria-busy', 'true');
+  galleryStatus.dataset.error = 'false';
   galleryStatus.textContent = 'Preparing your train snapshot...';
   try {
     const image = await painter.createSnapshot();
@@ -158,6 +167,9 @@ publish.addEventListener('click', async () => {
   } catch {
     galleryStatus.textContent = 'Could not create the train snapshot. Nothing was published; please try again.';
     galleryStatus.dataset.error = 'true';
-  } finally { publish.disabled = false; }
+  } finally {
+    publish.disabled = false;
+    publish.removeAttribute('aria-busy');
+  }
 });
 if (import.meta.hot) import.meta.hot.dispose(() => painter.destroy());

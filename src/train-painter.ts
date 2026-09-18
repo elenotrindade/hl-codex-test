@@ -16,6 +16,8 @@ export class TrainPainter {
   private activePointer: number | null = null;
   private previous: Point | null = null;
   private tool: ToolState;
+  private resizeObserver?: ResizeObserver;
+  private resolutionQuery?: MediaQueryList;
 
   constructor(private readonly canvas: HTMLCanvasElement, tool: ToolState,
     private readonly onChange: (marks: PaintMark[]) => void = () => {}, initialMarks: PaintMark[] = []) {
@@ -23,19 +25,14 @@ export class TrainPainter {
     if (!context) throw new Error('Canvas painting is unavailable in this browser.');
     this.context = context;
     this.tool = { ...tool };
-    canvas.width = TRAIN_WIDTH * 2;
-    canvas.height = TRAIN_HEIGHT * 2;
-    context.scale(2, 2);
-    context.beginPath();
-    for (const region of PAINTABLE_REGIONS) {
-      context.rect(region.x * TRAIN_WIDTH, region.y * TRAIN_HEIGHT,
-        region.width * TRAIN_WIDTH, region.height * TRAIN_HEIGHT);
+    this.marks.push(...initialMarks.map(mark => ({ ...mark })));
+    this.resize();
+    if (typeof ResizeObserver !== 'undefined') {
+      this.resizeObserver = new ResizeObserver(this.resize);
+      this.resizeObserver.observe(canvas);
     }
-    context.clip();
-    for (const mark of initialMarks) {
-      this.marks.push({ ...mark });
-      this.render(mark);
-    }
+    window.addEventListener('resize', this.resize);
+    this.watchResolution();
     canvas.addEventListener('pointerdown', this.start);
     canvas.addEventListener('pointermove', this.move);
     canvas.addEventListener('pointerup', this.finish);
@@ -45,6 +42,36 @@ export class TrainPainter {
   }
 
   setTool(tool: ToolState): void { this.tool = { ...tool }; }
+
+  private watchResolution = (): void => {
+    this.resolutionQuery?.removeEventListener('change', this.watchResolution);
+    this.resize();
+    if (typeof window.matchMedia === 'function') {
+      this.resolutionQuery = window.matchMedia(`(resolution: ${window.devicePixelRatio || 1}dppx)`);
+      this.resolutionQuery.addEventListener('change', this.watchResolution);
+    }
+  };
+
+  private resize = (): void => {
+    const bounds = this.canvas.getBoundingClientRect();
+    if (bounds.width <= 0 || bounds.height <= 0) return;
+    const ratio = Math.min(window.devicePixelRatio || 1, 3);
+    const width = Math.max(1, Math.round(bounds.width * ratio));
+    const height = Math.max(1, Math.round(bounds.height * ratio));
+    if (this.canvas.width === width && this.canvas.height === height) return;
+    // Resetting the backing store clears its transform and clip; replay normalized marks.
+    this.canvas.width = width;
+    this.canvas.height = height;
+    this.context.scale(width / TRAIN_WIDTH, height / TRAIN_HEIGHT);
+    this.context.beginPath();
+    for (const region of PAINTABLE_REGIONS) {
+      this.context.rect(region.x * TRAIN_WIDTH, region.y * TRAIN_HEIGHT,
+        region.width * TRAIN_WIDTH, region.height * TRAIN_HEIGHT);
+    }
+    this.context.clip();
+    this.previous = null;
+    for (const mark of this.marks) this.render(mark);
+  };
 
   async createSnapshot(): Promise<string> {
     const overlay = document.createElement('canvas');
@@ -188,5 +215,8 @@ export class TrainPainter {
     this.canvas.removeEventListener('pointercancel', this.finish);
     this.canvas.removeEventListener('lostpointercapture', this.finish);
     window.removeEventListener('blur', this.cancel);
+    window.removeEventListener('resize', this.resize);
+    this.resizeObserver?.disconnect();
+    this.resolutionQuery?.removeEventListener('change', this.watchResolution);
   }
 }

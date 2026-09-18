@@ -3,7 +3,7 @@ import { createPaintMark, TEXTURES, TrainPainter, type ToolState } from '../src/
 
 const tool: ToolState = { color: '#e2483d', texture: 'solid', brushSize: 0.025 };
 
-function setup(initial = [] as ReturnType<typeof createPaintMark>[]) {
+function setup(initial = [] as ReturnType<typeof createPaintMark>[], windowProperties = {}) {
   const context = Object.fromEntries(['scale', 'beginPath', 'rect', 'clip', 'save', 'restore', 'arc',
     'fill', 'stroke', 'moveTo', 'lineTo', 'closePath', 'translate', 'rotate', 'fillRect', 'clearRect']
     .map(name => [name, vi.fn()]));
@@ -12,7 +12,7 @@ function setup(initial = [] as ReturnType<typeof createPaintMark>[]) {
   canvas.getBoundingClientRect = () => ({ left: 0, top: 0, width: 1000, height: 400 }) as DOMRect;
   canvas.setPointerCapture = vi.fn();
   canvas.hasPointerCapture = () => false;
-  vi.stubGlobal('window', new EventTarget());
+  vi.stubGlobal('window', Object.assign(new EventTarget(), windowProperties));
   const onChange = vi.fn();
   const painter = new TrainPainter(canvas, tool, onChange, initial);
   const send = (type: string, overrides = {}) => {
@@ -23,6 +23,61 @@ function setup(initial = [] as ReturnType<typeof createPaintMark>[]) {
   return { painter, canvas, context, onChange, send };
 }
 afterEach(() => vi.unstubAllGlobals());
+
+describe('responsive canvas', () => {
+  it('resizes for viewport and pixel density, replays paint without saving, and removes listeners', () => {
+    const { painter, canvas, context, onChange, send } = setup();
+    send('pointerdown');
+    send('pointerup');
+    onChange.mockClear();
+    context.arc.mockClear();
+    Object.defineProperty(window, 'devicePixelRatio', { value: 2, configurable: true });
+    canvas.getBoundingClientRect = () => ({ left: 20, top: 10, width: 300, height: 120 }) as DOMRect;
+    window.dispatchEvent(new Event('resize'));
+    expect([canvas.width, canvas.height]).toEqual([600, 240]);
+    expect(context.scale).toHaveBeenLastCalledWith(0.6, 0.6);
+    expect(context.arc).toHaveBeenCalledTimes(1);
+    expect(onChange).not.toHaveBeenCalled();
+    window.dispatchEvent(new Event('resize'));
+    expect(context.arc).toHaveBeenCalledTimes(1);
+    send('pointerdown', { clientX: 170, clientY: 70 });
+    send('pointerup');
+    expect(onChange.mock.calls[0][0][1]).toEqual(createPaintMark({ x: 0.5, y: 0.5 }, tool));
+    painter.destroy();
+    canvas.getBoundingClientRect = () => ({ width: 500, height: 200 }) as DOMRect;
+    window.dispatchEvent(new Event('resize'));
+    expect(canvas.width).toBe(600);
+  });
+
+  it('observes element and density changes and disconnects both on destroy', () => {
+    const observe = vi.fn();
+    const disconnect = vi.fn();
+    let resize!: () => void;
+    vi.stubGlobal('ResizeObserver', class {
+      constructor(callback: () => void) { resize = callback; }
+      observe = observe;
+      disconnect = disconnect;
+    });
+    const query = new EventTarget();
+    const remove = vi.spyOn(query, 'removeEventListener');
+    const matchMedia = vi.fn(() => query);
+    const { painter, canvas } = setup([], { matchMedia, devicePixelRatio: 1 });
+    expect(observe).toHaveBeenCalledWith(canvas);
+    canvas.getBoundingClientRect = () => ({ width: 0, height: 0 }) as DOMRect;
+    resize();
+    expect(canvas.width).toBe(1000);
+    canvas.getBoundingClientRect = () => ({ width: 250, height: 100 }) as DOMRect;
+    resize();
+    expect(canvas.width).toBe(250);
+    Object.defineProperty(window, 'devicePixelRatio', { value: 2 });
+    query.dispatchEvent(new Event('change'));
+    expect(canvas.width).toBe(500);
+    expect(matchMedia).toHaveBeenLastCalledWith('(resolution: 2dppx)');
+    painter.destroy();
+    expect(disconnect).toHaveBeenCalledOnce();
+    expect(remove).toHaveBeenCalledTimes(2);
+  });
+});
 
 describe('gallery snapshots', () => {
   it('freezes paint before loading the train and exports base then overlay as PNG', async () => {
