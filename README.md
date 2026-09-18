@@ -39,6 +39,7 @@ Vite prints the local URL in the terminal. Open that URL in a browser to use the
 
 ```text
 hl-codex-test/
+├── .github/workflows/ci.yml # GitHub Actions CI check
 ├── README.md             # app overview, setup, scripts, testing, build, structure
 ├── index.html            # Vite HTML entry, loads /src/main.ts
 ├── package.json          # npm scripts and development dependencies
@@ -70,3 +71,9 @@ The build script runs TypeScript with `tsc --noEmit`, then produces production a
 ```bash
 npm run preview
 ```
+
+## Continuous Integration
+
+GitHub Actions runs the `CI` workflow for pull requests and pushes targeting `train-graffiti-painting-interactive-page-igmfrg`. The workflow uses Node.js 22 with npm caching, installs the locked dependency graph with `npm ci`, runs the Vitest suite once with `npm test -- --run`, and verifies the production build with `npm run build`.
+
+This gives maintainers a pre-merge status check that matches the local verification path. Requiring that check before merging is configured separately in GitHub branch protection settings; the workflow creates the check, but the repository settings decide whether it blocks merges.
