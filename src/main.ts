@@ -11,7 +11,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   <main>
     <header><p class="eyebrow">YARD / OPEN CANVAS / NO. 001</p>
       <h1>Leave your <em>mark.</em></h1>
-      <p>One train. Your colors. Pick a shade and drag across the blue body panels.</p>
+      <p>One train. Your colors. Dial in a fresh paint mix, then drag across the blue body panels.</p>
     </header>
     <section id="workshop" class="workshop" aria-label="Train painting workshop" tabindex="-1">
       <div class="stage-panel">
@@ -22,14 +22,16 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
       </div>
       <aside class="tools" aria-label="Painting tools">
         <h2>02 / Pick your paint</h2>
-        <div class="color-wheel" role="group" aria-label="Paint color">
-          <button type="button" class="color-wheel__surface" aria-label="Choose paint color from wheel">
+        <div class="color-wheel" role="group" aria-labelledby="color-wheel-label" aria-describedby="color-wheel-help">
+          <p id="color-wheel-label" class="tool-label">Color mixer</p>
+          <button type="button" class="color-wheel__surface" aria-label="Choose paint color from wheel" aria-describedby="color-wheel-help">
             <span class="color-wheel__handle" aria-hidden="true"></span>
           </button>
           <div class="selected-color">
             <span class="selected-color__chip" aria-hidden="true"></span>
             <span id="selected-color-text">Selected color ${DEFAULT_COLOR}</span>
           </div>
+          <p id="color-wheel-help" class="tool-note">Drag the wheel or use arrow keys to tune the paint.</p>
         </div>
         <label for="brush-size">Brush size <output id="size-value" for="brush-size">25</output></label>
         <input id="brush-size" type="range" min="6" max="60" value="25" aria-valuetext="25 train units" />
