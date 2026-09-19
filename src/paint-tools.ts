@@ -6,6 +6,10 @@ export type WheelSelection = {
   color: string;
 };
 
+export type WheelMoveDirection = 'up' | 'down' | 'left' | 'right';
+
+const KEYBOARD_STEP = 0.08;
+
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
@@ -32,4 +36,15 @@ export function colorFromWheelPoint(x: number, y: number): WheelSelection {
     y: point.y,
     color: `hsl(${hue} ${saturation}% 52%)`,
   };
+}
+
+export function moveWheelSelection(selection: WheelSelection, direction: WheelMoveDirection): WheelSelection {
+  const offset = {
+    up: { x: 0, y: -KEYBOARD_STEP },
+    down: { x: 0, y: KEYBOARD_STEP },
+    left: { x: -KEYBOARD_STEP, y: 0 },
+    right: { x: KEYBOARD_STEP, y: 0 },
+  }[direction];
+
+  return colorFromWheelPoint(selection.x + offset.x, selection.y + offset.y);
 }

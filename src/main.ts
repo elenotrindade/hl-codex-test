@@ -3,7 +3,7 @@ import { trainTemplate } from './train-template';
 import { TrainPainter, TEXTURES, type TextureId, type ToolState } from './train-painter';
 import { loadArtwork, saveArtwork, loadGallery, saveGallery } from './storage';
 import { seededGallery, publishArtwork, upvote, rankGallery } from './gallery';
-import { DEFAULT_COLOR, colorFromWheelPoint, type WheelSelection } from './paint-tools';
+import { DEFAULT_COLOR, colorFromWheelPoint, moveWheelSelection, type WheelMoveDirection, type WheelSelection } from './paint-tools';
 
 const tool: ToolState = { color: DEFAULT_COLOR, texture: 'solid', brushSize: 0.025 };
 document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
@@ -85,8 +85,10 @@ const colorWheel = document.querySelector<HTMLButtonElement>('.color-wheel__surf
 const colorHandle = document.querySelector<HTMLSpanElement>('.color-wheel__handle')!;
 const colorChip = document.querySelector<HTMLSpanElement>('.selected-color__chip')!;
 const selectedColorText = document.querySelector<HTMLSpanElement>('#selected-color-text')!;
+let currentSelection = colorFromWheelPoint(1, 0);
 
-function updateColorPreview(selection: WheelSelection): void {
+function updateSelectedColor(selection: WheelSelection): void {
+  currentSelection = selection;
   tool.color = selection.color;
   painter.setTool(tool);
   colorWheel.style.setProperty('--selected-color', selection.color);
@@ -94,17 +96,48 @@ function updateColorPreview(selection: WheelSelection): void {
   colorWheel.style.setProperty('--handle-y', `${(selection.y + 1) * 50}%`);
   colorChip.style.background = selection.color;
   selectedColorText.textContent = `Selected color ${selection.color}`;
+  colorWheel.setAttribute('aria-label', `Choose paint color from wheel. ${selection.color} selected.`);
 }
 
-colorWheel.addEventListener('pointerdown', event => {
+function selectionFromPointer(event: PointerEvent): WheelSelection {
   const rect = colorWheel.getBoundingClientRect();
-  const selection = colorFromWheelPoint(
+  return colorFromWheelPoint(
     ((event.clientX - rect.left) / rect.width) * 2 - 1,
     ((event.clientY - rect.top) / rect.height) * 2 - 1,
   );
-  updateColorPreview(selection);
+}
+
+colorWheel.addEventListener('pointerdown', event => {
+  colorWheel.setPointerCapture(event.pointerId);
+  colorWheel.dataset.dragging = 'true';
+  updateSelectedColor(selectionFromPointer(event));
 });
-updateColorPreview(colorFromWheelPoint(1, 0));
+colorWheel.addEventListener('pointermove', event => {
+  if (!colorWheel.hasPointerCapture(event.pointerId)) return;
+  updateSelectedColor(selectionFromPointer(event));
+});
+colorWheel.addEventListener('pointerup', event => {
+  if (colorWheel.hasPointerCapture(event.pointerId)) colorWheel.releasePointerCapture(event.pointerId);
+  delete colorWheel.dataset.dragging;
+});
+colorWheel.addEventListener('pointercancel', event => {
+  if (colorWheel.hasPointerCapture(event.pointerId)) colorWheel.releasePointerCapture(event.pointerId);
+  delete colorWheel.dataset.dragging;
+});
+colorWheel.addEventListener('keydown', event => {
+  const directionByKey: Partial<Record<string, WheelMoveDirection>> = {
+    ArrowUp: 'up',
+    ArrowDown: 'down',
+    ArrowLeft: 'left',
+    ArrowRight: 'right',
+  };
+  const direction = directionByKey[event.key];
+  if (!direction) return;
+
+  event.preventDefault();
+  updateSelectedColor(moveWheelSelection(currentSelection, direction));
+});
+updateSelectedColor(currentSelection);
 document.querySelector<HTMLInputElement>('#brush-size')!.addEventListener('input', event => {
   const value = (event.target as HTMLInputElement).valueAsNumber;
   tool.brushSize = value / 1000;
