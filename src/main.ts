@@ -5,6 +5,7 @@ import { seededGallery, publishArtwork, upvote, rankGallery, getRecentGallery, t
 import { getScenario, scenarios, type PaintScenario } from './scenarios';
 import { formatHexColor, hsvToRgb, parseHexColor, rgbToHsv, type HsvColor, type RgbColor } from './color-tools';
 import { openDialog } from './dialogs';
+import { exportTrainImage, type ExportAction, type ExportOutcome } from './artwork-export';
 
 const colors = [
   ['Signal red', '#e2483d'], ['Amber', '#f1aa2d'], ['Chalk', '#fff4db'],
@@ -65,13 +66,19 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
       </aside>
     <section class="display-panel" aria-labelledby="display-heading">
       <h2 id="display-heading">03 / On display</h2>
-      <p>A mock public feed. Submissions and votes stay in this browser only. Nothing is uploaded.</p>
+      <p>A local display rack. Submissions and votes stay in this browser only. Nothing is uploaded.</p>
       <label for="artwork-title">Artwork name <span>optional</span></label>
       <input id="artwork-title" type="text" maxlength="80" placeholder="Midnight layup" autocomplete="off" />
       <button type="button" id="publish-artwork">Put on display</button>
       <p id="gallery-status" role="status" aria-live="polite"></p>
+      <div class="export-actions" aria-labelledby="export-heading">
+        <h3 id="export-heading">Save or share your current train</h3>
+        <p>Download a PNG, or use your browser's share sheet where file sharing is supported.</p>
+        <button type="button" id="download-artwork">Download PNG</button>
+        <button type="button" id="share-artwork">Share image</button>
+        <p id="export-status" role="status" aria-live="polite"></p>
+      </div>
       <div id="gallery-feed" class="gallery-feed"></div>
-      <p id="share-status" role="status" aria-live="polite"></p>
     </section>
     </section>
     <section class="ranking-panel" aria-labelledby="ranking-heading">
@@ -210,7 +217,7 @@ document.querySelector<HTMLInputElement>('#brush-weight')!.addEventListener('inp
 const storedGallery = loadGallery();
 let entries = storedGallery.entries ?? seededGallery();
 const galleryStatus = document.querySelector<HTMLParagraphElement>('#gallery-status')!;
-const shareStatus = document.querySelector<HTMLParagraphElement>('#share-status')!;
+const exportStatus = document.querySelector<HTMLParagraphElement>('#export-status')!;
 const feed = document.querySelector<HTMLDivElement>('#gallery-feed')!;
 const ranking = document.querySelector<HTMLOListElement>('#gallery-ranking')!;
 galleryStatus.textContent = {
@@ -249,14 +256,7 @@ function renderGallery(): void {
       renderGallery();
       document.querySelector<HTMLButtonElement>(`[data-vote="${entry.id}"]`)?.focus();
     });
-    const share = document.createElement('button');
-    share.type = 'button';
-    share.textContent = 'Mock social share';
-    share.setAttribute('aria-label', `Mock social share for ${entry.title}`);
-    share.addEventListener('click', () => {
-      openShareDialog(entry, share);
-    });
-    card.append(image, title, source, vote, share);
+    card.append(image, title, source, vote);
     return card;
   }));
   ranking.replaceChildren(...rankGallery(entries).map(entry => {
@@ -296,14 +296,6 @@ function escapeHtml(value: string): string {
   return value.replace(/[&<>"]/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[character]!);
 }
 
-function openShareDialog(entry: GalleryEntry, opener: HTMLElement): void {
-  const dialog = document.querySelector<HTMLDialogElement>('#share-dialog')!;
-  const title = escapeHtml(entry.title);
-  dialog.innerHTML = `<form method="dialog" class="dialog-card"><h2 id="share-dialog-title">Mock share</h2><p>Demo only: ${title} will not be posted. No social platform is contacted.</p><div class="platforms"><button value="yard">YardNet</button><button value="story">Street Story</button><button value="copy">Copy mock link</button></div><button value="close">Close</button></form>`;
-  dialog.addEventListener('close', () => { shareStatus.textContent = `Demo only: ${entry.title} was not shared. No social platform was contacted.`; }, { once: true });
-  openDialog(dialog, opener);
-}
-
 function openArtworkDialog(entry: GalleryEntry, opener: HTMLElement): void {
   const dialog = document.querySelector<HTMLDialogElement>('#artwork-dialog')!;
   const title = escapeHtml(entry.title);
@@ -313,6 +305,42 @@ function openArtworkDialog(entry: GalleryEntry, opener: HTMLElement): void {
 
 renderGallery();
 const publish = document.querySelector<HTMLButtonElement>('#publish-artwork')!;
+const download = document.querySelector<HTMLButtonElement>('#download-artwork')!;
+const share = document.querySelector<HTMLButtonElement>('#share-artwork')!;
+
+function exportMessage(outcome: ExportOutcome): string {
+  if (outcome.status === 'downloaded') return `${outcome.filename} downloaded. Nothing was uploaded.`;
+  if (outcome.status === 'shared') return `${outcome.filename} handed to your browser's share sheet. YARD cannot confirm it was posted.`;
+  if (outcome.status === 'cancelled') return `Share cancelled. ${outcome.filename} was not posted by YARD.`;
+  if (outcome.status === 'unsupported') return `This browser cannot share image files from YARD. Use Download PNG instead.`;
+  return `Could not export the train snapshot: ${outcome.message}`;
+}
+
+async function exportCurrentTrain(action: ExportAction): Promise<void> {
+  download.disabled = true;
+  share.disabled = true;
+  download.setAttribute('aria-busy', 'true');
+  share.setAttribute('aria-busy', 'true');
+  exportStatus.dataset.error = 'false';
+  exportStatus.textContent = 'Preparing your train snapshot...';
+  try {
+    const image = await painter.createSnapshot();
+    const outcome = await exportTrainImage(image, action);
+    exportStatus.textContent = exportMessage(outcome);
+    exportStatus.dataset.error = String(outcome.status === 'failed');
+  } catch {
+    exportStatus.textContent = 'Could not create the train snapshot. Nothing was downloaded or shared; please try again.';
+    exportStatus.dataset.error = 'true';
+  } finally {
+    download.disabled = false;
+    share.disabled = false;
+    download.removeAttribute('aria-busy');
+    share.removeAttribute('aria-busy');
+  }
+}
+
+download.addEventListener('click', () => { void exportCurrentTrain('download'); });
+share.addEventListener('click', () => { void exportCurrentTrain('share'); });
 publish.addEventListener('click', async () => {
   publish.disabled = true;
   publish.setAttribute('aria-busy', 'true');

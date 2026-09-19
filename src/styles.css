@@ -67,11 +67,16 @@ input[type='range'] { width: 100%; min-height: 44px; margin-inline: 0; accent-co
 #paint-help { font-size: 12px; max-width: 60ch; }
 .stage-stamp { font-family: Impact, 'Arial Narrow', 'Liberation Sans Narrow', sans-serif; font-size: clamp(22px, 2.5vw, 36px); letter-spacing: .02em; color: var(--rail-steel); border: 2px solid; display: inline-block; padding: 4px 12px; transform: rotate(-3deg); margin: 24px 0 12px; }
 .display-panel { grid-area: feed; padding: 20px; background: #f9ecd6; }
-.display-panel > p, .gallery-card p, .ranking-panel > p { font-size: 12px; }
+.display-panel > p, .gallery-card p, .ranking-panel > p, .export-actions p { font-size: 12px; }
 .display-panel button { margin: 4px 4px 4px 0; }
 #publish-artwork { background: var(--rail-steel); color: var(--paper); box-shadow: 3px 3px 0 var(--signal-amber); width: 100%; }
 .display-panel input[type='text'] { width: 100%; min-height: 44px; margin: 4px 0 10px; border: 2px solid var(--rail-steel); background: var(--paper); color: var(--ink-black); font: inherit; padding: 8px; }
 .display-panel label span { font-size: 11px; font-weight: normal; }
+.export-actions { margin: 20px 0; padding: 14px; border: 1px dashed var(--rail-steel); background: #fff4db80; }
+.export-actions h3 { margin: 0 0 8px; font-size: 13px; line-height: 1.5; text-transform: uppercase; letter-spacing: .06em; }
+.export-actions button { width: calc(50% - 6px); }
+#download-artwork { background: var(--signal-amber); color: var(--ink-black); border-color: var(--ink-black); }
+#share-artwork { background: var(--paper); color: var(--rail-steel); }
 .gallery-feed { display: grid; gap: 20px; }
 .gallery-card { min-width: 0; padding: 12px; border: 1px solid var(--rail-steel); background: #ebe1c9; }
 .gallery-card img { display: block; width: 100%; height: auto; background: #d4dbd4; }
@@ -110,6 +115,7 @@ footer { margin-top: 24px; line-height: 1.6; }
   .stage-panel::before { margin: -16px -16px 16px; }
   .stage-stamp { margin-top: 12px; }
   .textures { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .export-actions button { width: 100%; }
 }
 @media (forced-colors: active) {
   .swatch { forced-color-adjust: none; }
