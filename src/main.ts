@@ -3,12 +3,9 @@ import { trainTemplate } from './train-template';
 import { TrainPainter, TEXTURES, type TextureId, type ToolState } from './train-painter';
 import { loadArtwork, saveArtwork, loadGallery, saveGallery } from './storage';
 import { seededGallery, publishArtwork, upvote, rankGallery } from './gallery';
+import { DEFAULT_COLOR, colorFromWheelPoint, type WheelSelection } from './paint-tools';
 
-const colors = [
-  ['Signal red', '#e2483d'], ['Amber', '#f1aa2d'], ['Chalk', '#fff4db'],
-  ['Ink', '#171513'], ['Electric blue', '#2588ed'], ['Mint', '#72d6ae'],
-] as const;
-const tool: ToolState = { color: colors[0][1], texture: 'solid', brushSize: 0.025 };
+const tool: ToolState = { color: DEFAULT_COLOR, texture: 'solid', brushSize: 0.025 };
 document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   <a class="skip-link" href="#workshop">Skip to the workshop</a>
   <main>
@@ -25,8 +22,14 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
       </div>
       <aside class="tools" aria-label="Painting tools">
         <h2>02 / Pick your paint</h2>
-        <div class="swatches" role="group" aria-label="Paint color">
-          ${colors.map(([name, color], i) => `<button type="button" class="swatch" style="--swatch:${color}" data-color="${color}" aria-label="${name}" aria-pressed="${i === 0}" title="${name}"></button>`).join('')}
+        <div class="color-wheel" role="group" aria-label="Paint color">
+          <button type="button" class="color-wheel__surface" aria-label="Choose paint color from wheel">
+            <span class="color-wheel__handle" aria-hidden="true"></span>
+          </button>
+          <div class="selected-color">
+            <span class="selected-color__chip" aria-hidden="true"></span>
+            <span id="selected-color-text">Selected color ${DEFAULT_COLOR}</span>
+          </div>
         </div>
         <label for="brush-size">Brush size <output id="size-value" for="brush-size">25</output></label>
         <input id="brush-size" type="range" min="6" max="60" value="25" aria-valuetext="25 train units" />
@@ -78,13 +81,30 @@ document.querySelectorAll<HTMLButtonElement>('[data-texture]').forEach(button =>
     document.querySelectorAll('[data-texture]').forEach(chip => chip.setAttribute('aria-pressed', String(chip === button)));
   });
 });
-document.querySelectorAll<HTMLButtonElement>('[data-color]').forEach(button => {
-  button.addEventListener('click', () => {
-    tool.color = button.dataset.color!;
-    painter.setTool(tool);
-    document.querySelectorAll('[data-color]').forEach(swatch => swatch.setAttribute('aria-pressed', String(swatch === button)));
-  });
+const colorWheel = document.querySelector<HTMLButtonElement>('.color-wheel__surface')!;
+const colorHandle = document.querySelector<HTMLSpanElement>('.color-wheel__handle')!;
+const colorChip = document.querySelector<HTMLSpanElement>('.selected-color__chip')!;
+const selectedColorText = document.querySelector<HTMLSpanElement>('#selected-color-text')!;
+
+function updateColorPreview(selection: WheelSelection): void {
+  tool.color = selection.color;
+  painter.setTool(tool);
+  colorWheel.style.setProperty('--selected-color', selection.color);
+  colorWheel.style.setProperty('--handle-x', `${(selection.x + 1) * 50}%`);
+  colorWheel.style.setProperty('--handle-y', `${(selection.y + 1) * 50}%`);
+  colorChip.style.background = selection.color;
+  selectedColorText.textContent = `Selected color ${selection.color}`;
+}
+
+colorWheel.addEventListener('pointerdown', event => {
+  const rect = colorWheel.getBoundingClientRect();
+  const selection = colorFromWheelPoint(
+    ((event.clientX - rect.left) / rect.width) * 2 - 1,
+    ((event.clientY - rect.top) / rect.height) * 2 - 1,
+  );
+  updateColorPreview(selection);
 });
+updateColorPreview(colorFromWheelPoint(1, 0));
 document.querySelector<HTMLInputElement>('#brush-size')!.addEventListener('input', event => {
   const value = (event.target as HTMLInputElement).valueAsNumber;
   tool.brushSize = value / 1000;
