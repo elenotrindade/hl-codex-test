@@ -19,15 +19,17 @@ export const SCENE_WIDTH = 1000;
 export const SCENE_HEIGHT = 400;
 
 const TRAIN_REGIONS = [
-  { x: 0.055, y: 0.215, width: 0.89, height: 0.43 },
+  { x: 0.055, y: 0.24, width: 0.89, height: 0.43 },
 ] as const;
 
 const WALL_REGIONS = [
-  { x: 0.035, y: 0.18, width: 0.93, height: 0.56 },
+  { x: 0, y: 0.2, width: 1, height: 0.62 },
 ] as const;
 
 const VEHICLE_REGIONS = [
-  { x: 0.075, y: 0.22, width: 0.75, height: 0.43 },
+  { x: 0.15, y: 0.13, width: 0.64, height: 0.36 },
+  { x: 0.15, y: 0.49, width: 0.66, height: 0.22 },
+  { x: 0.79, y: 0.2, width: 0.17, height: 0.46 },
 ] as const;
 
 function photoTemplate(scenario: Pick<PaintScenario, 'ariaLabel' | 'imageSrc' | 'width' | 'height'>): string {

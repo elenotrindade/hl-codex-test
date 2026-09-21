@@ -57,7 +57,7 @@ describe('artwork storage', () => {
   });
   it('validates marks against the requested scenario geometry', () => {
     const wallSnapshot: ArtworkSnapshot = {
-      marks: [{ x: 0.5, y: 0.19, size: 0.025, opacity: 0.8, color: '#e2483d', texture: 'solid' }],
+      marks: [{ x: 0.99, y: 0.3, size: 0.025, opacity: 0.8, color: '#e2483d', texture: 'solid' }],
       updatedAt: '2026-09-17T12:00:00.000Z',
     };
     const storage = memory();
