@@ -41,6 +41,20 @@ export function rankGallery(entries: readonly GalleryEntry[]): GalleryEntry[] {
   return [...entries].sort((a, b) => b.votes - a.votes || a.id.localeCompare(b.id));
 }
 
+export type GalleryPage<T> = {
+  items: T[];
+  page: number;
+  totalPages: number;
+};
+
+export function paginateGallery<T>(entries: readonly T[], page: number, pageSize: number): GalleryPage<T> {
+  const safePageSize = Math.max(1, Math.floor(pageSize));
+  const totalPages = Math.max(1, Math.ceil(entries.length / safePageSize));
+  const safePage = Math.min(Math.max(0, Math.floor(page)), totalPages - 1);
+  const start = safePage * safePageSize;
+  return { items: entries.slice(start, start + safePageSize), page: safePage, totalPages };
+}
+
 export function isGallery(value: unknown): value is GalleryEntry[] {
   if (!Array.isArray(value)) return false;
   const seeds = seededGallery();
@@ -54,5 +68,5 @@ export function isGallery(value: unknown): value is GalleryEntry[] {
     if (entry.source === 'seed') return seeds.some(seed => seed.id === entry.id && seed.imageDataUrl === entry.imageDataUrl);
     return entry.source === 'local' && !seeds.some(seed => seed.id === entry.id) &&
       /^data:image\/png;base64,[A-Za-z0-9+/]+={0,2}$/.test(entry.imageDataUrl);
-  }) && seeds.every(seed => ids.has(seed.id));
+  });
 }

@@ -32,6 +32,35 @@ export function rgbToHsv(rgb: RgbColor): HsvColor {
   return { h: Math.round(h < 0 ? h + 360 : h), s: Math.round(max === 0 ? 0 : (delta / max) * 100), v: Math.round(max * 100) };
 }
 
+export function hslToRgb(h: number, s: number, l: number): RgbColor {
+  const hue = ((h % 360) + 360) % 360;
+  const saturation = clamp(s, 0, 100) / 100;
+  const lightness = clamp(l, 0, 100) / 100;
+  const chroma = (1 - Math.abs(2 * lightness - 1)) * saturation;
+  const x = chroma * (1 - Math.abs((hue / 60) % 2 - 1));
+  const match = lightness - chroma / 2;
+  const [r, g, b] = hue < 60 ? [chroma, x, 0] : hue < 120 ? [x, chroma, 0] : hue < 180 ? [0, chroma, x] : hue < 240 ? [0, x, chroma] : hue < 300 ? [x, 0, chroma] : [chroma, 0, x];
+  return clampRgb({ r: (r + match) * 255, g: (g + match) * 255, b: (b + match) * 255 });
+}
+
+export function parseCssColor(value: string): RgbColor | null {
+  const hex = parseHexColor(value);
+  if (hex) return hex;
+  const hsl = value.trim().match(/^hsl\(\s*([\d.]+)\s+([\d.]+)%\s+([\d.]+)%\s*\)$/i);
+  if (!hsl) return null;
+  return hslToRgb(Number(hsl[1]), Number(hsl[2]), Number(hsl[3]));
+}
+
+export function paintColorHex(color: string): string {
+  return formatHexColor(parseCssColor(color) ?? { r: 226, g: 72, b: 61 });
+}
+
+export function describePaintColor(color: string, alpha = 1): { hex: string; rgba: string } {
+  const rgb = parseCssColor(color) ?? { r: 226, g: 72, b: 61 };
+  const opacity = Math.round(clamp(alpha, 0, 1) * 100) / 100;
+  return { hex: formatHexColor(rgb), rgba: `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${opacity})` };
+}
+
 export function hsvToRgb(hsv: HsvColor): RgbColor {
   const { h, s, v } = clampHsv(hsv);
   const c = (v / 100) * (s / 100);

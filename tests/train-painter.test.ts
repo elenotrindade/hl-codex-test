@@ -1,12 +1,29 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createPaintMark, TEXTURES, TrainPainter, type ToolState } from '../src/train-painter';
-import { getScenario } from '../src/scenarios';
+import { createPaintMark, BRUSH_TEXTURES, TEXTURES, TrainPainter, type ToolState } from '../src/train-painter';
+import { dripSteps, SPRAY_CLICK_BURST, sprayDripLength } from '../src/spray-physics';
+import { getScenario, paintableDripFloor, type PaintScenario } from '../src/scenarios';
+import { documentFromSnapshot, type ArtworkDocument } from '../src/artwork-document';
 
 const tool: ToolState = { color: '#e2483d', texture: 'solid', brushSize: 0.025, opacity: 0.8, weight: 1 };
 
-function setup(initial = [] as ReturnType<typeof createPaintMark>[], windowProperties = {}, onHistory = vi.fn()) {
+function clickStroke(point: { x: number; y: number }, current: ToolState, scenario: PaintScenario = getScenario('train')) {
+  const marks: ReturnType<typeof createPaintMark>[] = [];
+  for (let i = 0; i < SPRAY_CLICK_BURST; i++) {
+    const mark = createPaintMark(point, current);
+    if (!current.erase) {
+      const drip = sprayDripLength(point, marks, {
+        ...mark, dripAmount: current.drip ?? 1, floor: paintableDripFloor(scenario, point),
+      });
+      if (drip > 0) mark.drip = drip;
+    }
+    marks.push(mark);
+  }
+  return marks;
+}
+
+function setup(initial: ReturnType<typeof createPaintMark>[] | ArtworkDocument = [], windowProperties = {}, onHistory = vi.fn()) {
   const context = Object.fromEntries(['scale', 'beginPath', 'rect', 'clip', 'save', 'restore', 'arc',
-    'fill', 'stroke', 'moveTo', 'lineTo', 'closePath', 'translate', 'rotate', 'fillRect', 'clearRect']
+    'fill', 'stroke', 'moveTo', 'lineTo', 'closePath', 'translate', 'rotate', 'transform', 'fillRect', 'clearRect', 'fillText']
     .map(name => [name, vi.fn()]));
   const canvas = new EventTarget() as HTMLCanvasElement;
   canvas.getContext = vi.fn(() => context) as unknown as HTMLCanvasElement['getContext'];
@@ -24,6 +41,11 @@ function setup(initial = [] as ReturnType<typeof createPaintMark>[], windowPrope
   };
   return { painter, canvas, context, onChange, onCursor, send };
 }
+function canvasContext() {
+  return Object.fromEntries(['scale', 'beginPath', 'rect', 'clip', 'save', 'restore', 'arc',
+    'fill', 'stroke', 'moveTo', 'lineTo', 'closePath', 'translate', 'rotate', 'transform', 'fillRect', 'clearRect', 'drawImage', 'fillText']
+    .map(name => [name, vi.fn()]));
+}
 afterEach(() => vi.unstubAllGlobals());
 
 describe('responsive canvas', () => {
@@ -38,10 +60,14 @@ describe('responsive canvas', () => {
     window.dispatchEvent(new Event('resize'));
     expect([canvas.width, canvas.height]).toEqual([600, 240]);
     expect(context.scale).toHaveBeenLastCalledWith(0.6, 0.6);
-    expect(context.arc).toHaveBeenCalledTimes(1);
+    const replayArcs = clickStroke({ x: 0.5, y: 0.5 }, tool).reduce(
+      (total, mark) => total + 1 + (mark.drip ? dripSteps(mark.drip, mark.size * 1000 / 2, 400) + 1 : 0),
+      0,
+    );
+    expect(context.arc).toHaveBeenCalledTimes(replayArcs);
     expect(onChange).not.toHaveBeenCalled();
     window.dispatchEvent(new Event('resize'));
-    expect(context.arc).toHaveBeenCalledTimes(1);
+    expect(context.arc).toHaveBeenCalledTimes(replayArcs);
     send('pointerdown', { clientX: 170, clientY: 70 });
     send('pointerup');
     expect(onChange.mock.calls[0][0][1]).toEqual(createPaintMark({ x: 0.5, y: 0.5 }, tool));
@@ -84,7 +110,7 @@ describe('responsive canvas', () => {
 describe('gallery snapshots', () => {
   it('freezes paint before loading the train and exports base then overlay as PNG', async () => {
     const { painter, canvas } = setup();
-    const overlayContext = { drawImage: vi.fn() };
+    const overlayContext = canvasContext();
     const outputContext = { drawImage: vi.fn(), fillRect: vi.fn(), fillStyle: '' };
     const overlay = { getContext: () => overlayContext, width: 0, height: 0 };
     const output = { getContext: () => outputContext, toDataURL: vi.fn(() => 'data:image/png;base64,YQ=='), width: 0, height: 0 };
@@ -92,9 +118,9 @@ describe('gallery snapshots', () => {
     let train: { onload: () => void; src: string };
     vi.stubGlobal('Image', class { constructor() { train = this as unknown as typeof train; } });
     const result = painter.createSnapshot();
-    expect(overlayContext.drawImage).toHaveBeenCalledWith(canvas, 0, 0, 1000, 400);
+    expect(overlayContext.arc).toHaveBeenCalledTimes(0);
     expect(outputContext.drawImage).not.toHaveBeenCalled();
-    expect(decodeURIComponent(train!.src)).toContain('width="1000" height="400"');
+    expect(train!.src).toBe('/references/train-cart.png');
     painter.clear();
     train!.onload();
     expect(await result).toBe('data:image/png;base64,YQ==');
@@ -123,10 +149,10 @@ describe('scenario-driven painting', () => {
     const { painter, context, send, onChange } = setup();
     context.rect.mockClear();
     painter.setScenario(getScenario('wall'));
-    expect(context.rect).toHaveBeenCalledWith(80, 88, 840, 200);
     send('pointerdown', { clientX: 500, clientY: 110 });
     send('pointerup');
-    expect(onChange).toHaveBeenCalledWith([createPaintMark({ x: 0.5, y: 0.275 }, tool)]);
+    expect(context.rect).toHaveBeenCalledWith(0, 80, 1000, 248);
+    expect(onChange).toHaveBeenCalledWith(clickStroke({ x: 0.5, y: 0.275 }, tool, getScenario('wall')));
     onChange.mockClear();
     send('pointerdown', { clientX: 500, clientY: 340 });
     send('pointerup');
@@ -145,7 +171,7 @@ describe('scenario-driven painting', () => {
     let image: { onload: () => void; src: string };
     vi.stubGlobal('Image', class { constructor() { image = this as unknown as typeof image; } });
     const result = painter.createSnapshot();
-    expect(decodeURIComponent(image!.src)).toContain('Boxy street van');
+    expect(image!.src).toBe('/references/car.png');
     image!.onload();
     await expect(result).resolves.toBe('data:image/png;base64,Yg==');
     expect(outputContext.fillStyle).toBe('#d7d0be');
@@ -160,7 +186,13 @@ describe('paint marks and stroke lifecycle', () => {
     const mark = createPaintMark(point, current);
     current.color = '#ffffff';
     point.x = 0;
-    expect(mark).toEqual({ x: 0.5, y: 0.6, size: 0.025, opacity: 0.8, color: '#e2483d', texture });
+    expect(mark).toMatchObject({ x: 0.5, y: 0.6, size: 0.025, opacity: 0.8, color: '#e2483d', texture });
+    if (texture === 'custom') expect(mark.brush).toEqual({ angle: -30, aspect: 0.35, tip: 'chisel', softness: 0.15 });
+    else expect(mark.brush).toBeUndefined();
+  });
+  it('marks eraser dabs so replay can punch paint out', () => {
+    const mark = createPaintMark({ x: 0.5, y: 0.45 }, { ...tool, erase: true });
+    expect(mark).toMatchObject({ x: 0.5, y: 0.45, erase: true, color: '#000000' });
   });
   it('stores deterministic pressure-adjusted size and opacity', () => {
     const mark = createPaintMark({ x: 0.5, y: 0.5 }, { ...tool, brushSize: 0.02, weight: 1.5, opacity: 0.35 }, 0.5);
@@ -186,7 +218,7 @@ describe('paint marks and stroke lifecycle', () => {
     expect(onChange).not.toHaveBeenCalled();
     if (ending === 'blur') window.dispatchEvent(new Event('blur')); else send(ending);
     send('pointerup');
-    expect(onChange).toHaveBeenCalledExactlyOnceWith([createPaintMark({ x: 0.5, y: 0.5 }, tool)]);
+    expect(onChange).toHaveBeenCalledExactlyOnceWith(clickStroke({ x: 0.5, y: 0.5 }, tool));
     painter.destroy();
   });
   it('groups marks by stroke and undoes or redoes one stroke at a time', () => {
@@ -198,17 +230,17 @@ describe('paint marks and stroke lifecycle', () => {
     expect(painter.canUndo()).toBe(true);
     expect(painter.canRedo()).toBe(false);
     expect(painter.getMarks()).toEqual([
-      createPaintMark({ x: 0.4, y: 0.5 }, tool),
-      createPaintMark({ x: 0.6, y: 0.5 }, tool),
+      ...clickStroke({ x: 0.4, y: 0.5 }, tool),
+      ...clickStroke({ x: 0.6, y: 0.5 }, tool),
     ]);
     painter.undo();
-    expect(painter.getMarks()).toEqual([createPaintMark({ x: 0.4, y: 0.5 }, tool)]);
-    expect(onChange).toHaveBeenLastCalledWith([createPaintMark({ x: 0.4, y: 0.5 }, tool)]);
+    expect(painter.getMarks()).toEqual(clickStroke({ x: 0.4, y: 0.5 }, tool));
+    expect(onChange).toHaveBeenLastCalledWith(clickStroke({ x: 0.4, y: 0.5 }, tool));
     expect(painter.canRedo()).toBe(true);
     painter.redo();
     expect(painter.getMarks()).toEqual([
-      createPaintMark({ x: 0.4, y: 0.5 }, tool),
-      createPaintMark({ x: 0.6, y: 0.5 }, tool),
+      ...clickStroke({ x: 0.4, y: 0.5 }, tool),
+      ...clickStroke({ x: 0.6, y: 0.5 }, tool),
     ]);
     painter.destroy();
   });
@@ -225,11 +257,33 @@ describe('paint marks and stroke lifecycle', () => {
     fresh.send('pointerup', { clientX: 700 });
     expect(fresh.painter.canRedo()).toBe(false);
     expect(fresh.painter.getMarks()).toEqual([
-      createPaintMark({ x: 0.4, y: 0.5 }, tool),
-      createPaintMark({ x: 0.7, y: 0.5 }, tool),
+      ...clickStroke({ x: 0.4, y: 0.5 }, tool),
+      ...clickStroke({ x: 0.7, y: 0.5 }, tool),
     ]);
     expect(history).toHaveBeenLastCalledWith({ canUndo: true, canRedo: false });
     fresh.painter.destroy();
+  });
+  it('does not record eraser strokes on an empty canvas', () => {
+    const { painter, send, onChange } = setup();
+    painter.setTool({ ...tool, erase: true });
+    send('pointerdown');
+    send('pointerup');
+    expect(painter.getMarks()).toEqual([]);
+    expect(painter.canUndo()).toBe(false);
+    expect(painter.canRedo()).toBe(false);
+    expect(onChange).not.toHaveBeenCalled();
+    painter.destroy();
+  });
+  it('still records eraser strokes after paint exists', () => {
+    const { painter, send } = setup();
+    send('pointerdown');
+    send('pointerup');
+    painter.setTool({ ...tool, erase: true });
+    send('pointerdown', { clientX: 500 });
+    send('pointerup', { clientX: 500 });
+    expect(painter.canUndo()).toBe(true);
+    expect(painter.getMarks().some(mark => mark.erase)).toBe(true);
+    painter.destroy();
   });
   it('cancels an active stroke on clear without adding undo history', () => {
     const { painter, send, onChange } = setup();
@@ -254,7 +308,7 @@ describe('paint marks and stroke lifecycle', () => {
     send('pointerup', { pointerId: 2 });
     expect(onChange).not.toHaveBeenCalled();
     send('pointerup');
-    expect(onChange).toHaveBeenCalledWith([createPaintMark({ x: 0.5, y: 0.5 }, changed)]);
+    expect(onChange).toHaveBeenCalledWith(clickStroke({ x: 0.5, y: 0.5 }, changed));
     painter.destroy();
   });
   it.each([false, true])('clears and saves an empty snapshot, active stroke: %s', active => {
@@ -265,6 +319,26 @@ describe('paint marks and stroke lifecycle', () => {
     send('pointerup');
     expect(context.clearRect).toHaveBeenCalledWith(0, 0, 1000, 400);
     expect(onChange).toHaveBeenCalledExactlyOnceWith([]);
+    painter.destroy();
+  });
+  it('stores no drip when drip amount is off', () => {
+    const { painter, send, onChange } = setup();
+    painter.setTool({ ...tool, drip: 0 });
+    send('pointerdown');
+    send('pointerup');
+    const marks = onChange.mock.calls[0][0] as ReturnType<typeof createPaintMark>[];
+    expect(marks.every(mark => !mark.drip)).toBe(true);
+    painter.destroy();
+  });
+  it.each(BRUSH_TEXTURES)('a %s click bursts wet paint so a drip is stored on the stroke', texture => {
+    const { painter, send, onChange } = setup();
+    painter.setTool({ ...tool, texture });
+    send('pointerdown');
+    send('pointerup');
+    const marks = onChange.mock.calls[0][0] as ReturnType<typeof createPaintMark>[];
+    expect(marks).toEqual(clickStroke({ x: 0.5, y: 0.5 }, { ...tool, texture }));
+    expect(marks.some(mark => (mark.drip ?? 0) > 0)).toBe(true);
+    expect(Math.max(...marks.map(mark => mark.drip ?? 0))).toBeLessThan(0.12);
     painter.destroy();
   });
   it.each(TEXTURES)('replays %s with the same drawing commands as live painting', texture => {
@@ -281,5 +355,163 @@ describe('paint marks and stroke lifecycle', () => {
     expect(replay.onChange).not.toHaveBeenCalled();
     live.painter.destroy();
     replay.painter.destroy();
+  });
+
+  it('drags one rectangle and keeps the outline choice', () => {
+    const { painter, send, onChange } = setup();
+    painter.setTool({ ...tool, texture: 'shape', shapeKind: 'rect', shapeFill: false });
+    send('pointerdown', { clientX: 400, clientY: 180 });
+    send('pointermove', { clientX: 700, clientY: 240 });
+    send('pointerup');
+    const marks = onChange.mock.calls[0][0] as ReturnType<typeof createPaintMark>[];
+    expect(marks).toHaveLength(1);
+    expect(marks[0]).toMatchObject({ x: 0.4, y: 0.45, texture: 'shape', shape: { kind: 'rect', x2: 0.7, y2: 0.6, fill: false } });
+    expect(marks[0].drip).toBeUndefined();
+    painter.destroy();
+  });
+
+  it('resizes a finished ellipse from its corner and undo restores it', () => {
+    const { painter, send, onChange } = setup();
+    painter.setTool({ ...tool, texture: 'shape', shapeKind: 'ellipse', shapeFill: true });
+    send('pointerdown', { clientX: 400, clientY: 180 });
+    send('pointermove', { clientX: 700, clientY: 240 });
+    send('pointerup');
+    onChange.mockClear();
+    painter.setTool({ ...tool, adjust: true });
+    send('pointerdown', { clientX: 700, clientY: 240 });
+    send('pointermove', { clientX: 780, clientY: 260 });
+    send('pointerup');
+    const marks = onChange.mock.calls.at(-1)?.[0] as ReturnType<typeof createPaintMark>[];
+    expect(marks).toHaveLength(1);
+    expect(marks[0].shape).toMatchObject({ kind: 'ellipse', x2: 0.78, y2: 0.65 });
+    painter.undo();
+    expect(painter.getMarks()[0].shape).toMatchObject({ x2: 0.7, y2: 0.6 });
+    painter.redo();
+    expect(painter.getMarks()[0].shape).toMatchObject({ x2: 0.78, y2: 0.65 });
+    painter.destroy();
+  });
+
+  it('edits brush size and opacity on the selected shape', () => {
+    const { painter, send, onChange } = setup();
+    painter.setTool({ ...tool, texture: 'shape', shapeKind: 'rect', shapeFill: true, brushSize: 0.02, opacity: 0.9 });
+    send('pointerdown', { clientX: 400, clientY: 180 });
+    send('pointermove', { clientX: 700, clientY: 240 });
+    send('pointerup');
+    onChange.mockClear();
+    painter.setSelectedPaint({ size: 0.04, opacity: 0.4 });
+    painter.commitShapeEdit();
+    const marks = onChange.mock.calls.at(-1)?.[0] as ReturnType<typeof createPaintMark>[];
+    expect(marks[0]).toMatchObject({ size: 0.04, opacity: 0.4, shape: { x2: 0.7, y2: 0.6 } });
+    painter.undo();
+    expect(painter.getMarks()[0]).toMatchObject({ size: 0.02, opacity: 0.9 });
+    painter.destroy();
+  });
+
+  it('places one text mark and ignores the drag', () => {
+    const { painter, send, onChange } = setup();
+    painter.setTool({ ...tool, texture: 'text', text: 'HELLO', font: 'georgia' });
+    send('pointerdown');
+    send('pointermove', { clientX: 700, clientY: 240 });
+    send('pointerup');
+    const marks = onChange.mock.calls[0][0] as ReturnType<typeof createPaintMark>[];
+    expect(marks).toEqual([expect.objectContaining({ x: 0.5, y: 0.5, texture: 'text', text: { value: 'HELLO', font: 'georgia' } })]);
+    painter.destroy();
+  });
+
+  it('does not paint a blank text tool', () => {
+    const { painter, send, onChange } = setup();
+    painter.setTool({ ...tool, texture: 'text', text: '   ' });
+    send('pointerdown');
+    send('pointerup');
+    expect(onChange).not.toHaveBeenCalled();
+    painter.destroy();
+  });
+
+  it('does not wipe other layers when undoing a stroke', () => {
+    const layerTwoMark = createPaintMark({ x: 0.7, y: 0.5 }, { ...tool, color: '#24485c' });
+    const document = documentFromSnapshot({ marks: [createPaintMark({ x: 0.4, y: 0.5 }, tool)], updatedAt: '2026-09-17T12:00:00.000Z' });
+    document.layers.push({
+      id: 'paint-layer-2', name: 'Highlights', visible: true, locked: false,
+      marks: [layerTwoMark], createdAt: document.updatedAt, updatedAt: document.updatedAt,
+    });
+    const { painter, send } = setup(document);
+    expect(painter.canUndo()).toBe(false);
+    painter.setActiveLayer('paint-layer-1');
+    send('pointerdown', { clientX: 600 });
+    send('pointerup', { clientX: 600 });
+    painter.undo();
+    const restored = painter.getDocument();
+    expect(restored.layers[0].marks).toEqual([createPaintMark({ x: 0.4, y: 0.5 }, tool)]);
+    expect(restored.layers[1].marks).toEqual([layerTwoMark]);
+    expect(restored.layers).toHaveLength(2);
+    painter.destroy();
+  });
+
+  it('appends new strokes to the selected unlocked layer', () => {
+    const document = documentFromSnapshot({ marks: [createPaintMark({ x: 0.4, y: 0.5 }, tool)], updatedAt: '2026-09-17T12:00:00.000Z' });
+    const { painter, send, onChange } = setup(document);
+    painter.createLayer('Highlights');
+    send('pointerdown', { clientX: 600 });
+    send('pointerup', { clientX: 600 });
+    const saved = onChange.mock.lastCall![0] as ArtworkDocument;
+    expect(saved.layers[0].marks).toEqual([createPaintMark({ x: 0.4, y: 0.5 }, tool)]);
+    expect(saved.layers[1]).toMatchObject({ name: 'Highlights', marks: clickStroke({ x: 0.6, y: 0.5 }, tool) });
+    painter.destroy();
+  });
+
+  it('rejects painting into locked active layers', () => {
+    const document = documentFromSnapshot({ marks: [], updatedAt: '2026-09-17T12:00:00.000Z' });
+    const { painter, send, onChange } = setup(document);
+    painter.setLayerLocked('paint-layer-1', true);
+    onChange.mockClear();
+    send('pointerdown');
+    send('pointerup');
+    expect(painter.getDocument().layers[0].marks).toEqual([]);
+    expect(onChange).not.toHaveBeenCalled();
+    painter.destroy();
+  });
+
+  it('replays visible layers in stack order and excludes hidden layers from snapshots', async () => {
+    const document = documentFromSnapshot({ marks: [createPaintMark({ x: 0.4, y: 0.5 }, tool)], updatedAt: '2026-09-17T12:00:00.000Z' });
+    document.layers.push({
+      id: 'paint-layer-2', name: 'Top', visible: true, locked: false,
+      marks: [createPaintMark({ x: 0.6, y: 0.5 }, { ...tool, color: '#72d6ae' })],
+      createdAt: document.updatedAt, updatedAt: document.updatedAt,
+    });
+    document.activeLayerId = 'paint-layer-2';
+    const { painter, context } = setup(document);
+    expect(context.arc.mock.calls.map(call => call[0])).toEqual([400, 600]);
+    context.arc.mockClear();
+    painter.setLayerVisible('paint-layer-2', false);
+    expect(context.arc.mock.calls.map(call => call[0])).toEqual([400]);
+    const overlayContext = canvasContext();
+    const outputContext = { drawImage: vi.fn(), fillRect: vi.fn(), fillStyle: '' };
+    const overlay = { getContext: () => overlayContext, width: 0, height: 0 };
+    const output = { getContext: () => outputContext, toDataURL: vi.fn(() => 'data:image/png;base64,Yw=='), width: 0, height: 0 };
+    vi.stubGlobal('document', { createElement: vi.fn().mockReturnValueOnce(overlay).mockReturnValueOnce(output) });
+    let image: { onload: () => void; src: string };
+    vi.stubGlobal('Image', class { constructor() { image = this as unknown as typeof image; } });
+    const result = painter.createSnapshot();
+    expect(overlayContext.arc.mock.calls.map(call => call[0])).toEqual([400]);
+    image!.onload();
+    await expect(result).resolves.toBe('data:image/png;base64,Yw==');
+    painter.destroy();
+  });
+
+  it('duplicates, reorders, and deletes layers while keeping stroke history targets stable', () => {
+    const document = documentFromSnapshot({ marks: [createPaintMark({ x: 0.4, y: 0.5 }, tool)], updatedAt: '2026-09-17T12:00:00.000Z' });
+    const { painter, send } = setup(document);
+    painter.createLayer('Top');
+    send('pointerdown', { clientX: 600 });
+    send('pointerup', { clientX: 600 });
+    painter.duplicateLayer('paint-layer-2');
+    painter.moveLayer('paint-layer-3', 'down');
+    painter.deleteLayer('paint-layer-2');
+    expect(painter.getDocument().activeLayerId).toBe('paint-layer-3');
+    painter.undo();
+    expect(painter.getDocument().layers.some(layer => layer.id === 'paint-layer-2')).toBe(false);
+    painter.redo();
+    expect(painter.getDocument().layers.some(layer => layer.id === 'paint-layer-2')).toBe(false);
+    painter.destroy();
   });
 });

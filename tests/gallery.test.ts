@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { getRecentGallery, isGallery, publishArtwork, rankGallery, seededGallery, upvote } from '../src/gallery';
+import { getRecentGallery, isGallery, paginateGallery, publishArtwork, rankGallery, seededGallery, upvote } from '../src/gallery';
 import { ARTWORK_KEY, GALLERY_KEY, loadGallery, saveGallery } from '../src/storage';
 
 const image = 'data:image/png;base64,aGVsbG8=';
@@ -34,14 +34,14 @@ describe('mock gallery', () => {
     expect(publishArtwork(seeds, image, 'local-1', date, '   ')[0].title).toBe('Your train / 001');
     expect(publishArtwork(seeds, image, 'local-1', date, 'x'.repeat(90))[0].title).toHaveLength(80);
   });
-  it('returns the newest three entries without changing ranking data', () => {
+  it('returns the requested two newest entries without changing ranking data', () => {
     const entries = [
       ...seededGallery(),
       { id: 'local-1', title: 'One', imageDataUrl: image, createdAt: '2026-09-17T12:00:00.000Z', votes: 1, source: 'local' as const },
       { id: 'local-2', title: 'Two', imageDataUrl: image, createdAt: '2026-09-18T12:00:00.000Z', votes: 0, source: 'local' as const },
       { id: 'local-3', title: 'Three', imageDataUrl: image, createdAt: '2026-09-19T12:00:00.000Z', votes: 10, source: 'local' as const },
     ];
-    expect(getRecentGallery(entries, 3).map(entry => entry.id)).toEqual(['local-3', 'local-2', 'local-1']);
+    expect(getRecentGallery(entries, 2).map(entry => entry.id)).toEqual(['local-3', 'local-2']);
     expect(rankGallery(entries)[0].id).toBe('local-3');
     expect(entries[0].id).toBe('seed-1');
   });
@@ -57,6 +57,23 @@ describe('mock gallery', () => {
     expect(rankGallery(tied.reverse())[0].id).toBe('seed-1');
     const capped = entries.map(entry => ({ ...entry, votes: Number.MAX_SAFE_INTEGER }));
     expect(upvote(capped, 'seed-1')[0].votes).toBe(Number.MAX_SAFE_INTEGER);
+  });
+  it('paginates ranked entries into clamped slices', () => {
+    const entries = [
+      ...seededGallery(),
+      { id: 'local-1', title: 'One', imageDataUrl: image, createdAt: date, votes: 7, source: 'local' as const },
+      { id: 'local-2', title: 'Two', imageDataUrl: image, createdAt: date, votes: 3, source: 'local' as const },
+      { id: 'local-3', title: 'Three', imageDataUrl: image, createdAt: date, votes: 1, source: 'local' as const },
+    ];
+    const ranked = rankGallery(entries);
+    expect(paginateGallery(ranked, 0, 3)).toMatchObject({
+      items: ranked.slice(0, 3),
+      page: 0,
+      totalPages: 2,
+    });
+    expect(paginateGallery(ranked, 1, 3)).toMatchObject({ items: ranked.slice(3, 5), page: 1, totalPages: 2 });
+    expect(paginateGallery(ranked, 9, 3).page).toBe(1);
+    expect(paginateGallery(ranked, -2, 3).page).toBe(0);
   });
   it('persists submissions and seed/local votes separately from the draft', () => {
     const storage = memory();
@@ -74,7 +91,7 @@ describe('mock gallery', () => {
     expect(loadGallery(failing).status).toBe('unavailable');
     expect(saveGallery(seededGallery(), failing)).toBe(false);
   });
-  it.each(['{', 'null', '{}', '[]', '[null]'])('rejects malformed gallery %s', raw => {
+  it.each(['{', 'null', '{}', '[null]'])('rejects malformed gallery %s', raw => {
     expect(loadGallery(memory(raw).access)).toEqual({ entries: null, status: 'invalid' });
   });
   it.each([
@@ -90,10 +107,11 @@ describe('mock gallery', () => {
     expect(loadGallery(storage.access).entries).toEqual(entries);
     expect(loadGallery(memory(JSON.stringify(invalid)).access).status).toBe('invalid');
   });
-  it('rejects duplicate IDs, missing seeds, and altered seed images', () => {
+  it('rejects duplicate IDs and altered seed images, and accepts a gallery without demo trains', () => {
     const entries = seededGallery();
     expect(isGallery([...entries, entries[0]])).toBe(false);
-    expect(isGallery(entries.slice(1))).toBe(false);
+    expect(isGallery(entries.slice(1))).toBe(true);
+    expect(isGallery([])).toBe(true);
     entries[0].imageDataUrl = image;
     expect(isGallery(entries)).toBe(false);
   });
