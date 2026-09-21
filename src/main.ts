@@ -8,6 +8,7 @@ import { openDialog } from './dialogs';
 import { exportTrainImage, type ExportAction, type ExportOutcome } from './artwork-export';
 
 const tool: ToolState = { color: DEFAULT_COLOR, texture: 'solid', brushSize: 0.025, opacity: 0.9, weight: 1 };
+const displayFeedLimit = 2;
 let activeScenario: PaintScenario = getScenario('train');
 document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   <a class="skip-link" href="#workshop">Skip to the workshop</a>
@@ -71,6 +72,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
         <button type="button" id="share-artwork">Share image</button>
         <p id="export-status" role="status" aria-live="polite"></p>
       </div>
+      <p id="gallery-feed-summary" class="gallery-feed-summary"></p>
       <div id="gallery-feed" class="gallery-feed"></div>
     </section>
     </section>
@@ -228,6 +230,7 @@ const storedGallery = loadGallery();
 let entries = storedGallery.entries ?? seededGallery();
 const galleryStatus = document.querySelector<HTMLParagraphElement>('#gallery-status')!;
 const exportStatus = document.querySelector<HTMLParagraphElement>('#export-status')!;
+const feedSummary = document.querySelector<HTMLParagraphElement>('#gallery-feed-summary')!;
 const feed = document.querySelector<HTMLDivElement>('#gallery-feed')!;
 const ranking = document.querySelector<HTMLOListElement>('#gallery-ranking')!;
 galleryStatus.textContent = {
@@ -244,7 +247,9 @@ function persistGallery(message: string): void {
 }
 
 function renderGallery(): void {
-  feed.replaceChildren(...getRecentGallery(entries, 3).map(entry => {
+  const feedCards = getRecentGallery(entries, displayFeedLimit);
+  feedSummary.textContent = `Showing latest ${feedCards.length} of ${entries.length} creations.`;
+  feed.replaceChildren(...feedCards.map(entry => {
     const card = document.createElement('article');
     card.className = 'gallery-card';
     const image = document.createElement('img');

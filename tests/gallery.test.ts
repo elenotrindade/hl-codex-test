@@ -34,14 +34,14 @@ describe('mock gallery', () => {
     expect(publishArtwork(seeds, image, 'local-1', date, '   ')[0].title).toBe('Your train / 001');
     expect(publishArtwork(seeds, image, 'local-1', date, 'x'.repeat(90))[0].title).toHaveLength(80);
   });
-  it('returns the newest three entries without changing ranking data', () => {
+  it('returns the requested two newest entries without changing ranking data', () => {
     const entries = [
       ...seededGallery(),
       { id: 'local-1', title: 'One', imageDataUrl: image, createdAt: '2026-09-17T12:00:00.000Z', votes: 1, source: 'local' as const },
       { id: 'local-2', title: 'Two', imageDataUrl: image, createdAt: '2026-09-18T12:00:00.000Z', votes: 0, source: 'local' as const },
       { id: 'local-3', title: 'Three', imageDataUrl: image, createdAt: '2026-09-19T12:00:00.000Z', votes: 10, source: 'local' as const },
     ];
-    expect(getRecentGallery(entries, 3).map(entry => entry.id)).toEqual(['local-3', 'local-2', 'local-1']);
+    expect(getRecentGallery(entries, 2).map(entry => entry.id)).toEqual(['local-3', 'local-2']);
     expect(rankGallery(entries)[0].id).toBe('local-3');
     expect(entries[0].id).toBe('seed-1');
   });
