@@ -20,6 +20,31 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
         </select>
       </label>
       <span id="scenario-select-help">Changing canvas clears the current artwork after confirmation.</span>
+      <div class="top-toolstrip" role="group" aria-label="Primary painting tools">
+        <div class="color-wheel" role="group" aria-labelledby="color-wheel-label" aria-describedby="color-wheel-help">
+          <p id="color-wheel-label" class="tool-label">Color mixer</p>
+          <button type="button" class="color-wheel__surface" aria-label="Choose paint color from wheel" aria-describedby="color-wheel-help">
+            <span class="color-wheel__handle" aria-hidden="true"></span>
+          </button>
+          <div class="selected-color">
+            <span class="selected-color__chip" aria-hidden="true"></span>
+            <span id="selected-color-text">Selected color ${DEFAULT_COLOR}</span>
+          </div>
+          <p id="color-wheel-help" class="tool-note">Drag the wheel or use arrow keys to tune the paint.</p>
+        </div>
+        <div class="top-toolstrip__control top-toolstrip__size">
+          <label for="brush-size">Brush size <output id="size-value" for="brush-size">25</output></label>
+          <input id="brush-size" type="range" min="6" max="60" value="25" aria-valuetext="25 train units" />
+        </div>
+        <div class="textures" role="group" aria-label="Paint texture">
+          ${TEXTURES.map(texture => `<button type="button" data-texture="${texture}" aria-pressed="${texture === 'solid'}">${texture}</button>`).join('')}
+        </div>
+        <div class="history-actions" role="group" aria-label="Stroke history">
+          <button type="button" id="undo-stroke" disabled aria-disabled="true">Undo stroke</button>
+          <button type="button" id="redo-stroke" disabled aria-disabled="true">Redo stroke</button>
+        </div>
+        <button type="button" id="clear-artwork" aria-describedby="clear-help">Clear artwork</button>
+      </div>
     </div>
     <header>
       <h1>Leave your <em>mark.</em></h1>
@@ -32,33 +57,12 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
         <p id="paint-help">Drag with a mouse, pen, or finger. Paint stays inside the active street surface.</p>
         <p class="stage-stamp" aria-hidden="true">YOUR CITY. YOUR COLORS.</p>
       </div>
-      <aside class="tools" aria-label="Painting tools">
-        <h2>02 / Pick your paint</h2>
-        <div class="color-wheel" role="group" aria-labelledby="color-wheel-label" aria-describedby="color-wheel-help">
-          <p id="color-wheel-label" class="tool-label">Color mixer</p>
-          <button type="button" class="color-wheel__surface" aria-label="Choose paint color from wheel" aria-describedby="color-wheel-help">
-            <span class="color-wheel__handle" aria-hidden="true"></span>
-          </button>
-          <div class="selected-color">
-            <span class="selected-color__chip" aria-hidden="true"></span>
-            <span id="selected-color-text">Selected color ${DEFAULT_COLOR}</span>
-          </div>
-          <p id="color-wheel-help" class="tool-note">Drag the wheel or use arrow keys to tune the paint.</p>
-        </div>
-        <label for="brush-size">Brush size <output id="size-value" for="brush-size">25</output></label>
-        <input id="brush-size" type="range" min="6" max="60" value="25" aria-valuetext="25 train units" />
+      <aside class="tools" aria-label="Painting status and secondary controls">
+        <h2>02 / Paint details</h2>
         <label for="brush-opacity">Opacity <output id="opacity-value" for="brush-opacity">90%</output></label>
         <input id="brush-opacity" type="range" min="5" max="100" value="90" aria-valuetext="90 percent" />
         <label for="brush-weight">Brush weight <output id="weight-value" for="brush-weight">1.0x</output></label>
         <input id="brush-weight" type="range" min="50" max="200" value="100" aria-valuetext="1.0 times pressure" />
-        <div class="textures" role="group" aria-label="Paint texture">
-          ${TEXTURES.map(texture => `<button type="button" data-texture="${texture}" aria-pressed="${texture === 'solid'}">${texture}</button>`).join('')}
-        </div>
-        <div class="history-actions" role="group" aria-label="Stroke history">
-          <button type="button" id="undo-stroke" disabled aria-disabled="true">Undo stroke</button>
-          <button type="button" id="redo-stroke" disabled aria-disabled="true">Redo stroke</button>
-        </div>
-        <button type="button" id="clear-artwork" aria-describedby="clear-help">Clear artwork</button>
         <p id="clear-help" class="tool-note">Undo and redo work by complete stroke. Clear removes all paint.</p>
         <p id="save-status" role="status" aria-live="polite"></p>
       </aside>
