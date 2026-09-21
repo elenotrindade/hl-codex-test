@@ -68,5 +68,5 @@ export function isGallery(value: unknown): value is GalleryEntry[] {
     if (entry.source === 'seed') return seeds.some(seed => seed.id === entry.id && seed.imageDataUrl === entry.imageDataUrl);
     return entry.source === 'local' && !seeds.some(seed => seed.id === entry.id) &&
       /^data:image\/png;base64,[A-Za-z0-9+/]+={0,2}$/.test(entry.imageDataUrl);
-  }) && seeds.every(seed => ids.has(seed.id));
+  });
 }

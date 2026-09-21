@@ -1,16 +1,20 @@
+import '@fortawesome/fontawesome-free/css/fontawesome.css';
+import '@fortawesome/fontawesome-free/css/solid.css';
 import './styles.css';
 import { TrainPainter, TEXTURES, type TextureId, type ToolState } from './train-painter';
+import { BRUSH_TIP_LABELS, BRUSH_TIPS, clampCustomBrush, fittedStampRadius, loadCustomBrush, saveCustomBrush, stampCustomBrush, type BrushTip } from './custom-brush';
 import { loadArtworkDocument, saveArtwork, loadGallery, saveGallery } from './storage';
 import { createDefaultArtworkDocument, getActiveLayer, type ArtworkDocument } from './artwork-document';
 import { DEFAULT_COLOR, colorFromWheelPoint, moveWheelSelection, type WheelMoveDirection, type WheelSelection } from './paint-tools';
-import { seededGallery, publishArtwork, upvote, rankGallery, getRecentGallery, paginateGallery, type GalleryEntry } from './gallery';
+import { describePaintColor, formatHexColor, paintColorHex } from './color-tools';
+import { publishArtwork, upvote, rankGallery, paginateGallery, type GalleryEntry } from './gallery';
 import { getScenario, scenarios, type PaintScenario } from './scenarios';
 import { openDialog } from './dialogs';
 import { exportTrainImage, type ExportAction, type ExportOutcome } from './artwork-export';
 import { renderLayerPanel, syncLayerStatus } from './layer-panel';
+import { findPaintCanvas } from './paint-canvas';
 
-const tool: ToolState = { color: DEFAULT_COLOR, texture: 'solid', brushSize: 0.025, opacity: 0.9, weight: 1 };
-const displayFeedLimit = 2;
+const tool: ToolState = { color: DEFAULT_COLOR, texture: 'solid', brushSize: 0.025, opacity: 0.9, weight: 1, drip: 1, brush: loadCustomBrush() };
 const rankingPageSize = 3;
 let rankingPage = 0;
 let activeScenario: PaintScenario = getScenario('train');
@@ -18,85 +22,131 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   <a class="skip-link" href="#workshop">Skip to the workshop</a>
   <main>
     <div class="yard-strip">
-      <span>YARD / OPEN CANVAS / NO. 001</span>
-      <label for="scenario-select">Canvas
+      <p class="yard-strip__brand">
+        <span>YARD</span>
+        <span>OPEN CANVAS</span>
+        <span>NO. 001</span>
+      </p>
+      <div class="yard-strip__canvas">
+        <span id="scenario-select-help">Changing canvas clears the current artwork after confirmation.</span>
+        <label for="scenario-select">Canvas</label>
         <select id="scenario-select" aria-describedby="scenario-select-help">
           ${scenarios.map(scenario => `<option value="${scenario.id}"${scenario.id === activeScenario.id ? ' selected' : ''}>${scenario.label}</option>`).join('')}
         </select>
-      </label>
-      <span id="scenario-select-help">Changing canvas clears the current artwork after confirmation.</span>
-      <div class="top-toolstrip" role="group" aria-label="Primary painting tools">
-        <div class="color-wheel" role="group" aria-labelledby="color-wheel-label" aria-describedby="color-wheel-help">
-          <p id="color-wheel-label" class="tool-label">Color mixer</p>
-          <button type="button" class="color-wheel__surface" aria-label="Choose paint color from wheel" aria-describedby="color-wheel-help">
-            <span class="color-wheel__handle" aria-hidden="true"></span>
-          </button>
-          <div class="selected-color">
-            <span class="selected-color__chip" aria-hidden="true"></span>
-            <span id="selected-color-text">Selected color ${DEFAULT_COLOR}</span>
-          </div>
-          <p id="color-wheel-help" class="tool-note">Drag the wheel or use arrow keys to tune the paint.</p>
-        </div>
-        <div class="top-toolstrip__control top-toolstrip__size">
-          <label for="brush-size">Brush size <output id="size-value" for="brush-size">25</output></label>
-          <input id="brush-size" type="range" min="6" max="60" value="25" aria-valuetext="25 train units" />
-        </div>
-        <div class="textures" role="group" aria-label="Paint texture">
-          ${TEXTURES.map(texture => `<button type="button" data-texture="${texture}" aria-pressed="${texture === 'solid'}">${texture}</button>`).join('')}
-        </div>
-        <div class="history-actions" role="group" aria-label="Stroke history">
-          <button type="button" id="undo-stroke" disabled aria-disabled="true">Undo stroke</button>
-          <button type="button" id="redo-stroke" disabled aria-disabled="true">Redo stroke</button>
-        </div>
-        <button type="button" id="clear-artwork" aria-describedby="clear-help">Clear artwork</button>
       </div>
     </div>
     <header>
       <h1>Leave your <em>mark.</em></h1>
-      <p>Pick a real street surface. Dial in a fresh paint mix, then drag directly over the photo-lit panel.</p>
     </header>
     <section id="workshop" class="workshop" aria-label="Street painting workshop" tabindex="-1">
       <div class="stage-panel">
-        <div class="stage-heading"><h2>01 / Make it yours</h2><span id="scenario-stamp">TRAIN</span></div>
-        <div class="paint-stage" aria-live="polite">${activeScenario.template()}<canvas aria-label="${activeScenario.ariaLabel}" aria-describedby="paint-help">Canvas support is required to paint.</canvas><div class="brush-cursor" aria-hidden="true"></div></div>
-        <p id="paint-help">Drag with a mouse, pen, or finger. Paint stays inside the active street surface.</p>
-        <p class="stage-stamp" aria-hidden="true">YOUR CITY. YOUR COLORS.</p>
+        <div class="stage-heading">
+          <span id="scenario-stamp">TRAIN</span>
+        </div>
+        <div class="stage-canvas">
+          <div class="paint-stage" aria-live="polite">${activeScenario.template()}<canvas aria-label="${activeScenario.ariaLabel}">Canvas support is required to paint.</canvas><div class="brush-cursor" aria-hidden="true"></div></div>
+          <div class="stage-overlay stage-overlay--brushes">
+            <div class="textures" role="group" aria-label="Paint texture">
+              ${TEXTURES.map(texture => texture === 'custom' ? `<div class="texture-custom">
+                <button type="button" data-texture="custom" aria-pressed="false" aria-expanded="false" aria-controls="custom-brush-panel" aria-label="custom">
+                  <canvas id="custom-brush-preview" class="texture-sample" width="80" height="48" aria-hidden="true"></canvas>
+                  <span>custom</span>
+                </button>
+                <div id="custom-brush-panel" class="custom-brush" hidden>
+                  <p class="tool-label" id="custom-brush-title">Craft marker</p>
+                  <canvas id="custom-brush-popup-preview" class="custom-brush__preview" width="200" height="88" aria-hidden="true"></canvas>
+                  <label for="custom-brush-tip">Tip</label>
+                  <select id="custom-brush-tip">
+                    ${BRUSH_TIPS.map(tip => `<option value="${tip}">${BRUSH_TIP_LABELS[tip]}</option>`).join('')}
+                  </select>
+                  <label for="custom-brush-angle">Angle <output id="custom-angle-value" for="custom-brush-angle">-30°</output></label>
+                  <input id="custom-brush-angle" type="range" min="-90" max="90" value="-30" aria-valuetext="-30 degrees" />
+                  <label for="custom-brush-aspect">Nib ratio <output id="custom-aspect-value" for="custom-brush-aspect">0.35</output></label>
+                  <input id="custom-brush-aspect" type="range" min="15" max="100" value="35" aria-valuetext="0.35" />
+                  <label for="custom-brush-softness">Softness <output id="custom-softness-value" for="custom-brush-softness">15%</output></label>
+                  <input id="custom-brush-softness" type="range" min="0" max="80" value="15" aria-valuetext="15 percent" />
+                  <p class="tool-note">Stamps replay with the settings used on each stroke.</p>
+                </div>
+              </div>` : `<button type="button" data-texture="${texture}" aria-pressed="${texture === 'solid'}" aria-label="${texture}">
+                <img class="texture-sample" src="/references/texture-${texture}.svg" alt="" width="80" height="48" />
+                <span>${texture}</span>
+              </button>`).join('')}
+            </div>
+          </div>
+          <div class="stage-overlay stage-overlay--controls">
+            <div class="history-actions" role="group" aria-label="Stroke history">
+              <button type="button" id="undo-stroke" class="icon-button" disabled aria-disabled="true" aria-label="Undo stroke" title="Undo stroke">
+                <i class="fa-solid fa-rotate-left" aria-hidden="true"></i>
+              </button>
+              <button type="button" id="redo-stroke" class="icon-button" disabled aria-disabled="true" aria-label="Redo stroke" title="Redo stroke">
+                <i class="fa-solid fa-rotate-right" aria-hidden="true"></i>
+              </button>
+              <button type="button" id="clear-artwork" class="icon-button" aria-label="Clear artwork" title="Clear artwork">
+                <i class="fa-solid fa-trash-can" aria-hidden="true"></i>
+              </button>
+            </div>
+            <div class="stage-size">
+              <label for="brush-size">Brush size <output id="size-value" for="brush-size">25</output></label>
+              <input id="brush-size" type="range" min="6" max="60" value="25" aria-valuetext="25 train units" />
+            </div>
+          </div>
+        </div>
       </div>
       <aside class="tools" aria-label="Painting status and secondary controls">
-        <h2>02 / Paint details</h2>
+        <div class="color-wheel" role="group" aria-labelledby="color-wheel-label">
+          <p id="color-wheel-label" class="tool-label">Color mixer</p>
+          <div class="color-wheel__ring">
+            <p id="selected-color-hex" class="color-wheel__meta color-wheel__meta--hex">#e2483d</p>
+            <button type="button" class="color-wheel__surface" aria-label="Choose paint color from wheel">
+              <span class="color-wheel__handle" aria-hidden="true"></span>
+            </button>
+            <p id="selected-color-rgba" class="color-wheel__meta color-wheel__meta--rgba">rgba(226, 72, 61, 0.9)</p>
+          </div>
+          <div class="color-presets" role="group" aria-label="Preset colors">
+            <button type="button" class="color-swatch" data-color-preset="#000000" aria-pressed="false" aria-label="Black" title="Black"><span class="color-swatch__fill" aria-hidden="true"></span></button>
+            <button type="button" class="color-swatch" data-color-preset="#ffffff" aria-pressed="false" aria-label="White" title="White"><span class="color-swatch__fill" aria-hidden="true"></span></button>
+            <button type="button" id="eraser-tool" aria-pressed="false" aria-label="Eraser" title="Eraser">
+              <i class="fa-solid fa-eraser" aria-hidden="true"></i>
+            </button>
+            <button type="button" id="color-picker" aria-pressed="false" aria-label="Pick a color from the canvas" title="Pick a color from the canvas">
+              <i class="fa-solid fa-eye-dropper" aria-hidden="true"></i>
+            </button>
+          </div>
+        </div>
         <label for="brush-opacity">Opacity <output id="opacity-value" for="brush-opacity">90%</output></label>
         <input id="brush-opacity" type="range" min="5" max="100" value="90" aria-valuetext="90 percent" />
         <label for="brush-weight">Brush weight <output id="weight-value" for="brush-weight">1.0x</output></label>
         <input id="brush-weight" type="range" min="50" max="200" value="100" aria-valuetext="1.0 times pressure" />
-        <p id="clear-help" class="tool-note">Undo and redo work by complete stroke. Clear removes all paint.</p>
-        <div class="layer-panel" aria-labelledby="layers-heading">
-          <div class="layer-panel__heading"><h3 id="layers-heading">Layers</h3><button type="button" id="add-layer">Add layer</button></div>
-          <ol id="layer-list" class="layer-list"></ol>
-          <p id="layer-status" role="status" aria-live="polite"></p>
-        </div>
+        <label for="brush-drip">Drip <output id="drip-value" for="brush-drip">100%</output></label>
+        <input id="brush-drip" type="range" min="0" max="100" value="100" aria-valuetext="100 percent" />
         <p id="save-status" role="status" aria-live="polite"></p>
       </aside>
-    <section class="display-panel" aria-labelledby="display-heading">
-      <h2 id="display-heading">03 / On display</h2>
-      <p>A local display rack. Submissions and votes stay in this browser only. Nothing is uploaded.</p>
-      <label for="artwork-title">Artwork name <span>optional</span></label>
-      <input id="artwork-title" type="text" maxlength="80" placeholder="Midnight layup" autocomplete="off" />
-      <button type="button" id="publish-artwork">Put on display</button>
-      <p id="gallery-status" role="status" aria-live="polite"></p>
-      <div class="export-actions" aria-labelledby="export-heading">
-        <h3 id="export-heading">Save or share your current scene</h3>
-        <p>Download a PNG, or use your browser's share sheet where file sharing is supported.</p>
-        <button type="button" id="download-artwork">Download PNG</button>
-        <button type="button" id="share-artwork">Share image</button>
-        <p id="export-status" role="status" aria-live="polite"></p>
-      </div>
-      <p id="gallery-feed-summary" class="gallery-feed-summary"></p>
-      <div id="gallery-feed" class="gallery-feed"></div>
+      <aside class="layer-panel" aria-labelledby="layers-heading">
+        <div class="layer-panel__heading"><h2 id="layers-heading">Layers</h2><button type="button" id="add-layer">Add layer</button></div>
+        <ol id="layer-list" class="layer-list"></ol>
+        <p id="layer-status" role="status" aria-live="polite"></p>
+      </aside>
     </section>
+    <section class="display-panel" aria-label="On display">
+      <div class="display-actions">
+        <div class="display-publish">
+          <label for="artwork-title">Artwork name <span>optional</span></label>
+          <input id="artwork-title" type="text" maxlength="80" placeholder="Midnight layup" autocomplete="off" />
+          <button type="button" id="publish-artwork">Put on display</button>
+          <p id="gallery-status" role="status" aria-live="polite"></p>
+        </div>
+        <div class="export-actions" aria-labelledby="export-heading">
+          <h3 id="export-heading">Save or share your current scene</h3>
+          <div class="export-actions__buttons">
+            <button type="button" id="download-artwork">Download PNG</button>
+            <button type="button" id="share-artwork">Share image</button>
+          </div>
+          <p id="export-status" role="status" aria-live="polite"></p>
+        </div>
+      </div>
     </section>
     <section class="ranking-panel" aria-labelledby="ranking-heading">
       <h2 id="ranking-heading" class="ranking-heading">Yard ranking / Most upvoted</h2>
-      <p>Demo voting: vote as often as you like. Ties use entry ID order.</p>
       <ol id="gallery-ranking"></ol>
       <nav class="ranking-pagination" aria-label="Yard ranking pages">
         <button type="button" id="ranking-prev">Previous</button>
@@ -109,7 +159,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
     <footer>Saved automatically after each stroke, in this browser only.</footer>
   </main>`;
 
-const canvas = document.querySelector<HTMLCanvasElement>('canvas')!;
+const canvas = findPaintCanvas(document)!;
 const cursor = document.querySelector<HTMLDivElement>('.brush-cursor')!;
 const undoButton = document.querySelector<HTMLButtonElement>('#undo-stroke')!;
 const redoButton = document.querySelector<HTMLButtonElement>('#redo-stroke')!;
@@ -145,9 +195,7 @@ const painter = new TrainPainter(canvas, tool, document => {
   const markCount = artwork.layers.reduce((total, layer) => total + layer.marks.length, 0);
   const success = saveArtwork(artwork, undefined, activeScenario);
   renderLayers(artwork);
-  status.textContent = success
-    ? (markCount ? `${activeScenario.label} artwork saved in this browser.` : `Empty ${activeScenario.label.toLowerCase()} scene saved in this browser.`)
-    : 'Could not save. Changes may be lost on reload.';
+  status.textContent = success ? '' : 'Could not save.';
   status.dataset.error = String(!success);
 }, saved.document ?? createDefaultArtworkDocument(), activeScenario, state => {
   const stage = cursor.parentElement!;
@@ -155,8 +203,9 @@ const painter = new TrainPainter(canvas, tool, document => {
   cursor.style.setProperty('--cursor-x', `${state.x * 100}%`);
   cursor.style.setProperty('--cursor-y', `${state.y * 100}%`);
   cursor.style.setProperty('--cursor-size', `${state.size * activeScenario.width}px`);
-  cursor.style.setProperty('--cursor-color', state.color);
+  cursor.style.setProperty('--cursor-color', tool.erase ? '#fff4db' : state.color);
   cursor.style.setProperty('--cursor-opacity', String(state.opacity));
+  stage.dataset.eraser = String(Boolean(tool.erase));
 }, updateHistoryControls);
 renderLayers(painter.getDocument());
 document.querySelector<HTMLButtonElement>('#add-layer')!.addEventListener('click', () => {
@@ -194,29 +243,158 @@ scenarioSelect.addEventListener('change', () => {
     : `Ready to paint the ${activeScenario.label.toLowerCase()}, but the blank scene could not be saved.`;
   status.dataset.error = String(!success);
 });
+const customBrushPanel = document.querySelector<HTMLDivElement>('#custom-brush-panel')!;
+const customBrushPreview = document.querySelector<HTMLCanvasElement>('#custom-brush-preview')!;
+const customBrushPopupPreview = document.querySelector<HTMLCanvasElement>('#custom-brush-popup-preview')!;
+const customTextureButton = document.querySelector<HTMLButtonElement>('[data-texture="custom"]')!;
+const customTip = document.querySelector<HTMLSelectElement>('#custom-brush-tip')!;
+const customAngle = document.querySelector<HTMLInputElement>('#custom-brush-angle')!;
+const customAspect = document.querySelector<HTMLInputElement>('#custom-brush-aspect')!;
+const customSoftness = document.querySelector<HTMLInputElement>('#custom-brush-softness')!;
+
+function paintStampPreview(canvas: HTMLCanvasElement): void {
+  const context = canvas.getContext('2d');
+  if (!context) return;
+  const brush = clampCustomBrush(tool.brush);
+  context.setTransform(1, 0, 0, 1, 0, 0);
+  context.clearRect(0, 0, canvas.width, canvas.height);
+  context.fillStyle = '#fff4db';
+  context.fillRect(0, 0, canvas.width, canvas.height);
+  context.fillStyle = tool.erase ? '#171513' : tool.color;
+  stampCustomBrush(context, canvas.width / 2, canvas.height / 2, fittedStampRadius(canvas.width, canvas.height, brush), 0.9, brush);
+}
+
+function paintCustomPreview(): void {
+  paintStampPreview(customBrushPreview);
+  paintStampPreview(customBrushPopupPreview);
+}
+
+function setCustomBrushOpen(open: boolean): void {
+  customBrushPanel.hidden = !open;
+  customTextureButton.setAttribute('aria-expanded', String(open));
+}
+
+function syncCustomBrushPanel(open?: boolean): void {
+  const brush = clampCustomBrush(tool.brush);
+  tool.brush = brush;
+  customTip.value = brush.tip;
+  customAngle.value = String(Math.round(brush.angle));
+  customAspect.value = String(Math.round(brush.aspect * 100));
+  customSoftness.value = String(Math.round(brush.softness * 100));
+  document.querySelector<HTMLOutputElement>('#custom-angle-value')!.value = `${Math.round(brush.angle)}°`;
+  document.querySelector<HTMLOutputElement>('#custom-aspect-value')!.value = brush.aspect.toFixed(2);
+  document.querySelector<HTMLOutputElement>('#custom-softness-value')!.value = `${Math.round(brush.softness * 100)}%`;
+  customAngle.setAttribute('aria-valuetext', `${Math.round(brush.angle)} degrees`);
+  customAspect.setAttribute('aria-valuetext', brush.aspect.toFixed(2));
+  customSoftness.setAttribute('aria-valuetext', `${Math.round(brush.softness * 100)} percent`);
+  if (open !== undefined) setCustomBrushOpen(open);
+  else if (tool.texture !== 'custom') setCustomBrushOpen(false);
+  paintCustomPreview();
+}
+
+function commitCustomBrush(): void {
+  tool.brush = clampCustomBrush({
+    tip: customTip.value as BrushTip,
+    angle: customAngle.valueAsNumber,
+    aspect: customAspect.valueAsNumber / 100,
+    softness: customSoftness.valueAsNumber / 100,
+  });
+  painter.setTool(tool);
+  saveCustomBrush(tool.brush);
+  syncCustomBrushPanel();
+}
+
 document.querySelectorAll<HTMLButtonElement>('[data-texture]').forEach(button => {
   button.addEventListener('click', () => {
-    tool.texture = button.dataset.texture as TextureId;
+    const texture = button.dataset.texture as TextureId;
+    const alreadyCustom = tool.texture === 'custom' && texture === 'custom';
+    tool.texture = texture;
     painter.setTool(tool);
     document.querySelectorAll('[data-texture]').forEach(chip => chip.setAttribute('aria-pressed', String(chip === button)));
+    syncCustomBrushPanel(texture === 'custom' ? !alreadyCustom || customBrushPanel.hidden : false);
   });
 });
+customTip.addEventListener('change', () => commitCustomBrush());
+customAngle.addEventListener('input', () => commitCustomBrush());
+customAspect.addEventListener('input', () => commitCustomBrush());
+customSoftness.addEventListener('input', () => commitCustomBrush());
+document.addEventListener('pointerdown', event => {
+  if (customBrushPanel.hidden) return;
+  const target = event.target as Node | null;
+  if (target && customTextureButton.parentElement?.contains(target)) return;
+  setCustomBrushOpen(false);
+});
+document.addEventListener('keydown', event => {
+  if (event.key === 'Escape' && !customBrushPanel.hidden) setCustomBrushOpen(false);
+});
+syncCustomBrushPanel(false);
 const colorWheel = document.querySelector<HTMLButtonElement>('.color-wheel__surface')!;
 const colorHandle = document.querySelector<HTMLSpanElement>('.color-wheel__handle')!;
-const colorChip = document.querySelector<HTMLSpanElement>('.selected-color__chip')!;
-const selectedColorText = document.querySelector<HTMLSpanElement>('#selected-color-text')!;
+const selectedColorHex = document.querySelector<HTMLParagraphElement>('#selected-color-hex')!;
+const selectedColorRgba = document.querySelector<HTMLParagraphElement>('#selected-color-rgba')!;
+const colorPresets = document.querySelectorAll<HTMLButtonElement>('[data-color-preset]');
+const eraserButton = document.querySelector<HTMLButtonElement>('#eraser-tool')!;
+const colorPicker = document.querySelector<HTMLButtonElement>('#color-picker')!;
 let currentSelection = colorFromWheelPoint(1, 0);
+let activePreset: string | null = null;
+let pickingColor = false;
+
+function setPickingColor(active: boolean): void {
+  pickingColor = active;
+  const stage = canvas.parentElement;
+  if (stage) stage.dataset.picker = String(active);
+  colorPicker.setAttribute('aria-pressed', String(active));
+}
+
+function syncColorReadout(): void {
+  if (tool.erase) {
+    selectedColorHex.textContent = 'eraser';
+    selectedColorRgba.textContent = 'removes paint';
+    return;
+  }
+  const readout = describePaintColor(tool.color, tool.opacity);
+  selectedColorHex.textContent = readout.hex;
+  selectedColorRgba.textContent = readout.rgba;
+}
+
+function syncColorPresets(): void {
+  colorPresets.forEach(button => button.setAttribute('aria-pressed', String(button.dataset.colorPreset === activePreset && !tool.erase)));
+  eraserButton.setAttribute('aria-pressed', String(Boolean(tool.erase)));
+}
+
+function applyPaintColor(color: string): void {
+  setPickingColor(false);
+  tool.color = paintColorHex(color);
+  tool.erase = false;
+  painter.setTool(tool);
+  colorWheel.style.setProperty('--selected-color', color);
+  colorWheel.classList.toggle('color-wheel__surface--preset', Boolean(activePreset));
+  colorHandle.hidden = Boolean(activePreset);
+  syncColorReadout();
+  syncColorPresets();
+  colorWheel.setAttribute('aria-label', `Choose paint color from wheel. ${color} selected.`);
+  paintCustomPreview();
+}
+
+function activateEraser(): void {
+  activePreset = null;
+  setPickingColor(false);
+  tool.erase = true;
+  painter.setTool(tool);
+  colorWheel.classList.add('color-wheel__surface--preset');
+  colorHandle.hidden = true;
+  syncColorReadout();
+  syncColorPresets();
+  colorWheel.setAttribute('aria-label', 'Choose paint color from wheel. Eraser selected.');
+  paintCustomPreview();
+}
 
 function updateSelectedColor(selection: WheelSelection): void {
   currentSelection = selection;
-  tool.color = selection.color;
-  painter.setTool(tool);
-  colorWheel.style.setProperty('--selected-color', selection.color);
+  activePreset = null;
   colorWheel.style.setProperty('--handle-x', `${(selection.x + 1) * 50}%`);
   colorWheel.style.setProperty('--handle-y', `${(selection.y + 1) * 50}%`);
-  colorChip.style.background = selection.color;
-  selectedColorText.textContent = `Selected color ${selection.color}`;
-  colorWheel.setAttribute('aria-label', `Choose paint color from wheel. ${selection.color} selected.`);
+  applyPaintColor(selection.color);
 }
 
 function selectionFromPointer(event: PointerEvent): WheelSelection {
@@ -257,6 +435,64 @@ colorWheel.addEventListener('keydown', event => {
   event.preventDefault();
   updateSelectedColor(moveWheelSelection(currentSelection, direction));
 });
+colorPresets.forEach(button => {
+  button.addEventListener('click', () => {
+    activePreset = button.dataset.colorPreset ?? null;
+    if (!activePreset) return;
+    applyPaintColor(activePreset);
+  });
+});
+eraserButton.addEventListener('click', () => activateEraser());
+colorPicker.addEventListener('click', () => setPickingColor(!pickingColor));
+canvas.addEventListener('pointerdown', event => {
+  if (!pickingColor || event.button !== 0) return;
+  event.preventDefault();
+  event.stopPropagation();
+  const color = sampleCanvasColor(canvas, event.clientX, event.clientY);
+  if (!color) return;
+  activePreset = color === '#000000' || color === '#ffffff' ? color : null;
+  applyPaintColor(color);
+}, true);
+
+function sampleCanvasColor(paintCanvas: HTMLCanvasElement, clientX: number, clientY: number): string | null {
+  const bounds = paintCanvas.getBoundingClientRect();
+  if (bounds.width <= 0 || bounds.height <= 0) return null;
+  const u = (clientX - bounds.left) / bounds.width;
+  const v = (clientY - bounds.top) / bounds.height;
+  if (u < 0 || v < 0 || u > 1 || v > 1) return null;
+  const paint = paintCanvas.getContext('2d')?.getImageData(
+    Math.min(paintCanvas.width - 1, Math.max(0, Math.floor(u * paintCanvas.width))),
+    Math.min(paintCanvas.height - 1, Math.max(0, Math.floor(v * paintCanvas.height))),
+    1, 1,
+  ).data;
+  const photo = document.querySelector<HTMLImageElement>('.scene-photo');
+  const background = photo ? samplePhotoPixel(photo, u, v) : null;
+  if (!paint && !background) return null;
+  const source = paint ?? new Uint8ClampedArray([0, 0, 0, 0]);
+  const base = background ?? new Uint8ClampedArray([0, 0, 0, 0]);
+  const alpha = source[3] / 255;
+  if (alpha <= 0 && base[3] <= 0) return null;
+  return formatHexColor({
+    r: Math.round(source[0] * alpha + base[0] * (1 - alpha)),
+    g: Math.round(source[1] * alpha + base[1] * (1 - alpha)),
+    b: Math.round(source[2] * alpha + base[2] * (1 - alpha)),
+  });
+}
+
+function samplePhotoPixel(photo: HTMLImageElement, u: number, v: number): Uint8ClampedArray | null {
+  if (!photo.complete || photo.naturalWidth <= 0 || photo.naturalHeight <= 0) return null;
+  const frame = photo.getBoundingClientRect();
+  const scale = Math.max(frame.width / photo.naturalWidth, frame.height / photo.naturalHeight);
+  const sourceX = Math.min(photo.naturalWidth - 1, Math.max(0, (u * frame.width + (photo.naturalWidth * scale - frame.width) / 2) / scale));
+  const sourceY = Math.min(photo.naturalHeight - 1, Math.max(0, (v * frame.height + (photo.naturalHeight * scale - frame.height) / 2) / scale));
+  const sample = document.createElement('canvas');
+  sample.width = 1;
+  sample.height = 1;
+  const context = sample.getContext('2d');
+  if (!context) return null;
+  context.drawImage(photo, sourceX, sourceY, 1, 1, 0, 0, 1, 1);
+  return context.getImageData(0, 0, 1, 1).data;
+}
 updateSelectedColor(currentSelection);
 document.querySelector<HTMLInputElement>('#brush-size')!.addEventListener('input', event => {
   const value = (event.target as HTMLInputElement).valueAsNumber;
@@ -269,6 +505,7 @@ document.querySelector<HTMLInputElement>('#brush-opacity')!.addEventListener('in
   const value = (event.target as HTMLInputElement).valueAsNumber;
   tool.opacity = value / 100;
   painter.setTool(tool);
+  syncColorReadout();
   document.querySelector<HTMLOutputElement>('#opacity-value')!.value = `${value}%`;
   (event.target as HTMLInputElement).setAttribute('aria-valuetext', `${value} percent`);
 });
@@ -279,21 +516,22 @@ document.querySelector<HTMLInputElement>('#brush-weight')!.addEventListener('inp
   document.querySelector<HTMLOutputElement>('#weight-value')!.value = `${value.toFixed(1)}x`;
   (event.target as HTMLInputElement).setAttribute('aria-valuetext', `${value.toFixed(1)} times pressure`);
 });
+document.querySelector<HTMLInputElement>('#brush-drip')!.addEventListener('input', event => {
+  const value = (event.target as HTMLInputElement).valueAsNumber;
+  tool.drip = value / 100;
+  painter.setTool(tool);
+  document.querySelector<HTMLOutputElement>('#drip-value')!.value = `${value}%`;
+  (event.target as HTMLInputElement).setAttribute('aria-valuetext', `${value} percent`);
+});
 const storedGallery = loadGallery();
-let entries = storedGallery.entries ?? seededGallery();
+let entries = (storedGallery.entries ?? []).filter(entry => entry.source !== 'seed');
 const galleryStatus = document.querySelector<HTMLParagraphElement>('#gallery-status')!;
 const exportStatus = document.querySelector<HTMLParagraphElement>('#export-status')!;
-const feedSummary = document.querySelector<HTMLParagraphElement>('#gallery-feed-summary')!;
-const feed = document.querySelector<HTMLDivElement>('#gallery-feed')!;
 const ranking = document.querySelector<HTMLOListElement>('#gallery-ranking')!;
 const rankingPrev = document.querySelector<HTMLButtonElement>('#ranking-prev')!;
 const rankingNext = document.querySelector<HTMLButtonElement>('#ranking-next')!;
 const rankingPageStatus = document.querySelector<HTMLSpanElement>('#ranking-page-status')!;
-galleryStatus.textContent = {
-  loaded: 'Local display and votes restored.', missing: 'Built-in examples are ready. Add your train.',
-  invalid: 'Saved display could not be read. Showing built-in examples.',
-  unavailable: 'Local storage unavailable. Display changes will last only for this session.',
-}[storedGallery.status];
+galleryStatus.textContent = '';
 galleryStatus.dataset.error = String(storedGallery.status === 'invalid' || storedGallery.status === 'unavailable');
 
 function persistGallery(message: string): void {
@@ -303,35 +541,6 @@ function persistGallery(message: string): void {
 }
 
 function renderGallery(): void {
-  const feedCards = getRecentGallery(entries, displayFeedLimit);
-  feedSummary.textContent = `Showing latest ${feedCards.length} of ${entries.length} creations.`;
-  feed.replaceChildren(...feedCards.map(entry => {
-    const card = document.createElement('article');
-    card.className = 'gallery-card';
-    const image = document.createElement('img');
-    image.src = entry.imageDataUrl;
-    image.alt = `${entry.title} - painted train`;
-    image.width = 1000;
-    image.height = 400;
-    const title = document.createElement('h3');
-    title.textContent = entry.title;
-    const source = document.createElement('p');
-    source.textContent = entry.source === 'seed' ? 'Built-in example / mock public' : 'Your submission / this browser only';
-    const vote = document.createElement('button');
-    vote.type = 'button';
-    vote.dataset.vote = entry.id;
-    vote.textContent = `Upvote (${entry.votes})`;
-    vote.setAttribute('aria-label', `Upvote ${entry.title}, ${entry.votes} votes`);
-    vote.addEventListener('click', () => {
-      entries = upvote(entries, entry.id);
-      persistGallery(`Upvoted ${entry.title}.`);
-      renderGallery();
-      document.querySelector<HTMLButtonElement>(`#gallery-ranking [data-vote="${entry.id}"]`)?.focus()
-        ?? document.querySelector<HTMLButtonElement>(`#gallery-feed [data-vote="${entry.id}"]`)?.focus();
-    });
-    card.append(image, title, source, vote);
-    return card;
-  }));
   const rankedPage = paginateGallery(rankGallery(entries), rankingPage, rankingPageSize);
   rankingPage = rankedPage.page;
   ranking.replaceChildren(...rankedPage.items.map(entry => {
@@ -360,8 +569,7 @@ function renderGallery(): void {
       entries = upvote(entries, entry.id);
       persistGallery(`Upvoted ${entry.title}.`);
       renderGallery();
-      document.querySelector<HTMLButtonElement>(`#gallery-ranking [data-vote="${entry.id}"]`)?.focus()
-        ?? document.querySelector<HTMLButtonElement>(`#gallery-feed [data-vote="${entry.id}"]`)?.focus();
+      document.querySelector<HTMLButtonElement>(`#gallery-ranking [data-vote="${entry.id}"]`)?.focus();
     });
     item.append(image, title, votes, zoom, vote);
     return item;

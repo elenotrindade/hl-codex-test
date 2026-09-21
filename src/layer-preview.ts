@@ -3,6 +3,18 @@ import { type PaintMark } from './train-painter';
 function markShape(mark: PaintMark): SVGElement {
   const namespace = 'http://www.w3.org/2000/svg';
   const size = Math.max(2, mark.size * 100);
+  if (mark.texture === 'custom' && mark.brush) {
+    const rect = document.createElementNS(namespace, 'rect');
+    const width = size * 2;
+    const height = Math.max(2, width * mark.brush.aspect);
+    rect.setAttribute('x', String(mark.x * 100 - width / 2));
+    rect.setAttribute('y', String(mark.y * 40 - height / 2));
+    rect.setAttribute('width', String(width));
+    rect.setAttribute('height', String(height));
+    rect.setAttribute('rx', mark.brush.tip === 'round' ? String(height / 2) : '0');
+    rect.setAttribute('transform', `rotate(${mark.brush.angle} ${mark.x * 100} ${mark.y * 40})`);
+    return rect;
+  }
   if (mark.texture === 'marker') {
     const rect = document.createElementNS(namespace, 'rect');
     rect.setAttribute('x', String(mark.x * 100 - size));
@@ -33,6 +45,7 @@ export function createLayerPreview(marks: PaintMark[]): SVGSVGElement {
   background.setAttribute('rx', '2');
   preview.append(background);
   for (const mark of marks) {
+    if (mark.erase) continue;
     const shape = markShape(mark);
     shape.setAttribute('fill', mark.color);
     shape.setAttribute('opacity', String(mark.opacity ?? 1));

@@ -91,7 +91,7 @@ describe('mock gallery', () => {
     expect(loadGallery(failing).status).toBe('unavailable');
     expect(saveGallery(seededGallery(), failing)).toBe(false);
   });
-  it.each(['{', 'null', '{}', '[]', '[null]'])('rejects malformed gallery %s', raw => {
+  it.each(['{', 'null', '{}', '[null]'])('rejects malformed gallery %s', raw => {
     expect(loadGallery(memory(raw).access)).toEqual({ entries: null, status: 'invalid' });
   });
   it.each([
@@ -107,10 +107,11 @@ describe('mock gallery', () => {
     expect(loadGallery(storage.access).entries).toEqual(entries);
     expect(loadGallery(memory(JSON.stringify(invalid)).access).status).toBe('invalid');
   });
-  it('rejects duplicate IDs, missing seeds, and altered seed images', () => {
+  it('rejects duplicate IDs and altered seed images, and accepts a gallery without demo trains', () => {
     const entries = seededGallery();
     expect(isGallery([...entries, entries[0]])).toBe(false);
-    expect(isGallery(entries.slice(1))).toBe(false);
+    expect(isGallery(entries.slice(1))).toBe(true);
+    expect(isGallery([])).toBe(true);
     entries[0].imageDataUrl = image;
     expect(isGallery(entries)).toBe(false);
   });

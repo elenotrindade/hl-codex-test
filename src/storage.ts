@@ -1,4 +1,6 @@
 import { TEXTURES, type PaintMark } from './train-painter';
+import { isCustomBrush } from './custom-brush';
+import { clamp, paintColorHex } from './color-tools';
 import { getScenario, isInsidePaintableArea, type PaintScenario } from './scenarios';
 import { isGallery, type GalleryEntry } from './gallery';
 import { cloneArtworkDocument, documentFromSnapshot, type ArtworkDocument, type ArtworkSnapshot } from './artwork-document';
@@ -17,7 +19,10 @@ export function isMark(value: unknown, scenario: PaintScenario): value is PaintM
   return Number.isFinite(mark.x) && Number.isFinite(mark.y) && isInsidePaintableArea(scenario, mark) &&
     typeof mark.color === 'string' && /^#[0-9a-f]{6}$/i.test(mark.color) &&
     TEXTURES.includes(mark.texture) && Number.isFinite(mark.size) && mark.size >= 0.003 && mark.size <= 0.12 &&
-    (mark.opacity === undefined || Number.isFinite(mark.opacity) && mark.opacity >= 0.05 && mark.opacity <= 1);
+    (mark.opacity === undefined || Number.isFinite(mark.opacity) && mark.opacity >= 0.05 && mark.opacity <= 1) &&
+    (mark.erase === undefined || mark.erase === true) &&
+    (mark.brush === undefined || isCustomBrush(mark.brush)) &&
+    (mark.drip === undefined || Number.isFinite(mark.drip) && mark.drip >= 0 && mark.drip <= 1);
 }
 
 function isSnapshot(value: unknown, scenario: PaintScenario): value is ArtworkSnapshot {
@@ -69,9 +74,26 @@ export function loadArtwork(access: StorageAccess = browserStorage, scenario: Pa
   return { snapshot: result.document ? { marks: result.document.layers.flatMap(layer => layer.marks.map(mark => ({ ...mark }))), updatedAt: result.document.updatedAt } : null, status: result.status };
 }
 
+function persistableMark(mark: PaintMark): PaintMark {
+  const next: PaintMark = { ...mark, color: paintColorHex(mark.color) };
+  if (Number.isFinite(mark.size)) next.size = clamp(mark.size, 0.003, 0.12);
+  if (mark.brush) next.brush = { ...mark.brush };
+  return next;
+}
+
+function persistableDocument(document: ArtworkDocument): ArtworkDocument {
+  return {
+    ...document,
+    layers: document.layers.map(layer => ({
+      ...layer,
+      marks: layer.marks.map(persistableMark),
+    })),
+  };
+}
+
 export function saveArtwork(document: ArtworkDocument | ArtworkSnapshot, access: StorageAccess = browserStorage, scenario: PaintScenario = getScenario('train')): boolean {
   try {
-    const value = 'version' in document ? document : documentFromSnapshot(document);
+    const value = persistableDocument('version' in document ? document : documentFromSnapshot(document));
     if (!isArtworkDocument(value, scenario)) return false;
     access().setItem(ARTWORK_KEY, JSON.stringify(value));
     return true;

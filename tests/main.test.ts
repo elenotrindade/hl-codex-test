@@ -26,7 +26,10 @@ class TestElement {
 }
 
 function installDocument() {
-  vi.stubGlobal('document', { createElement: (tagName: string) => new TestElement(tagName) });
+  vi.stubGlobal('document', {
+    createElement: (tagName: string) => new TestElement(tagName),
+    createElementNS: (_namespace: string, tagName: string) => new TestElement(tagName),
+  });
 }
 
 function findByDataset(root: TestElement, key: string, value = 'true'): TestElement {
@@ -66,13 +69,18 @@ afterEach(() => vi.unstubAllGlobals());
 describe('layer panel DOM', () => {
   it('renders active and visibility ARIA state for the stack', () => {
     const { layerList, layerStatus } = render();
-    expect(layerStatus.textContent).toBe('Highlights is active.');
+    expect(layerStatus.textContent).toBe('');
     expect(layerList.children).toHaveLength(2);
     const top = layerList.children[0];
     expect(top.dataset).toMatchObject({ layerId: 'paint-layer-2', active: 'true', locked: 'true', visible: 'false' });
+    expect(findByDataset(top, 'layerSelect').className).toBe('layer-row__radio');
     expect(findByDataset(top, 'layerSelect').getAttribute('aria-pressed')).toBe('true');
+    expect(findByDataset(top, 'layerSelect').getAttribute('title')).toBe('Active layer Highlights');
     expect(findByDataset(top, 'layerVisible').getAttribute('aria-pressed')).toBe('false');
-    expect(findByDataset(top, 'layerLock').textContent).toBe('Locked');
+    expect(findByDataset(top, 'layerVisible').getAttribute('title')).toBe('Show Highlights');
+    expect(findByDataset(top, 'layerLock').getAttribute('aria-label')).toBe('Unlock Highlights');
+    expect(findByDataset(top, 'layerLock').getAttribute('title')).toBe('Unlock Highlights');
+    expect(findByDataset(top, 'layerLock').children[0]?.tagName).toBe('svg');
   });
 
   it('wires select, rename, lock, visibility, and duplicate events deterministically', () => {

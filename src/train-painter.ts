@@ -2,11 +2,16 @@ import { getScenario, isInsidePaintableArea, type PaintScenario } from './scenar
 import { type Point } from './train-template';
 import { cloneArtworkDocument, createDefaultArtworkDocument, createLayer as addDocumentLayer, deleteLayer as deleteDocumentLayer, duplicateLayer as duplicateDocumentLayer, flattenVisibleMarks, getActiveLayer, moveLayer as moveDocumentLayer, renameLayer as renameDocumentLayer, selectLayer, setLayerLocked as setDocumentLayerLocked, setLayerVisible as setDocumentLayerVisible, touchDocument, type ArtworkDocument } from './artwork-document';
 
-export const TEXTURES = ['solid', 'spray', 'marker'] as const;
+import { clampCustomBrush, stampCustomBrush, type CustomBrush } from './custom-brush';
+import { clamp, paintColorHex } from './color-tools';
+import { SprayCanAudio } from './spray-audio';
+import { SPRAY_CLICK_BURST, sprayDripLength, stampDrip, stampSpray } from './spray-physics';
+
+export const TEXTURES = ['solid', 'spray', 'marker', 'custom'] as const;
 export type TextureId = typeof TEXTURES[number];
-export type ToolState = { color: string; texture: TextureId; brushSize: number; opacity: number; weight: number };
+export type ToolState = { color: string; texture: TextureId; brushSize: number; opacity: number; weight: number; drip?: number; erase?: boolean; brush?: CustomBrush };
 // Positions and diameter are normalized; size is a fraction of train width.
-export type PaintMark = Point & { color: string; texture: TextureId; size: number; opacity: number };
+export type PaintMark = Point & { color: string; texture: TextureId; size: number; opacity: number; erase?: boolean; brush?: CustomBrush; drip?: number };
 export type CursorPreviewState = { visible: boolean; x: number; y: number; size: number; color: string; opacity: number };
 export type HistoryState = { canUndo: boolean; canRedo: boolean };
 type LayerPaintStroke = { layerId: string; marks: PaintMark[] };
@@ -31,7 +36,16 @@ function applyPhotoLighting(context: CanvasRenderingContext2D, width: number, he
 export function createPaintMark(point: Point, tool: ToolState, pressure = 0): PaintMark {
   const weight = tool.weight ?? 1;
   const pressureScale = pressure > 0 ? 0.65 + pressure * weight : weight;
-  return { ...point, color: tool.color, texture: tool.texture, size: tool.brushSize * pressureScale, opacity: tool.opacity ?? 1 };
+  const mark: PaintMark = {
+    ...point,
+    color: tool.erase ? '#000000' : paintColorHex(tool.color),
+    texture: tool.texture,
+    size: clamp(tool.brushSize * pressureScale, 0.003, 0.12),
+    opacity: tool.opacity ?? 1,
+  };
+  if (tool.erase) mark.erase = true;
+  if (tool.texture === 'custom') mark.brush = clampCustomBrush(tool.brush);
+  return mark;
 }
 
 export class TrainPainter {
@@ -46,6 +60,8 @@ export class TrainPainter {
   private readonly emitLegacyMarks: boolean;
   private resizeObserver?: ResizeObserver;
   private resolutionQuery?: MediaQueryList;
+  private readonly sprayAudio = new SprayCanAudio();
+  private sprayPump?: number;
 
   constructor(private readonly canvas: HTMLCanvasElement, tool: ToolState,
     private readonly onChange: (document: ArtworkDocument | PaintMark[]) => void = () => {}, initialDocument: ArtworkDocument | PaintMark[] = createDefaultArtworkDocument(),
@@ -81,7 +97,10 @@ export class TrainPainter {
     this.notifyHistoryChange();
   }
 
-  setTool(tool: ToolState): void { this.tool = { ...tool }; }
+  setTool(tool: ToolState): void {
+    this.tool = { ...tool };
+    if (this.tool.erase) this.stopSprayFx();
+  }
 
   setScenario(scenario: PaintScenario, document: ArtworkDocument | PaintMark[] = createDefaultArtworkDocument()): void {
     this.cancel();
@@ -197,12 +216,6 @@ export class TrainPainter {
     this.canvas.width = width;
     this.canvas.height = height;
     this.context.scale(width / this.scenario.width, height / this.scenario.height);
-    this.context.beginPath();
-    for (const region of this.scenario.paintableRegions) {
-      this.context.rect(region.x * this.scenario.width, region.y * this.scenario.height,
-        region.width * this.scenario.width, region.height * this.scenario.height);
-    }
-    this.context.clip();
     this.previous = null;
     this.replayMarks(this.context);
   };
@@ -255,11 +268,15 @@ export class TrainPainter {
     if (this.activePointer !== null || !event.isPrimary || event.button !== 0) return;
     const point = this.point(event);
     if (!isInsidePaintableArea(this.scenario, point)) return;
-    this.canvas.setPointerCapture(event.pointerId);
+    try { this.canvas.setPointerCapture(event.pointerId); } catch { /* synthetic events may not capture */ }
     this.activePointer = event.pointerId;
     this.previous = point;
     this.currentStroke = { layerId: '', marks: [] };
     this.paint(point, event.pressure);
+    if (!this.tool.erase) {
+      for (let i = 1; i < SPRAY_CLICK_BURST; i++) this.paint(point, event.pressure);
+    }
+    this.startSprayFx();
   };
 
   private move = (event: PointerEvent): void => {
@@ -283,6 +300,10 @@ export class TrainPainter {
     const activeLayer = getActiveLayer(this.document);
     if (!activeLayer || activeLayer.locked) return;
     const mark = createPaintMark(point, this.tool, pressure);
+    if (!mark.erase) {
+      const drip = sprayDripLength(point, this.currentStroke.marks, { ...mark, dripAmount: this.tool.drip ?? 1 });
+      if (drip > 0) mark.drip = drip;
+    }
     activeLayer.marks.push(mark);
     if (!this.currentStroke.layerId) this.currentStroke.layerId = activeLayer.id;
     this.currentStroke.marks.push({ ...mark });
@@ -316,39 +337,43 @@ export class TrainPainter {
     for (const mark of flattenVisibleMarks(this.document)) this.renderTo(ctx, mark);
   }
 
+  private clipPaintable(ctx: CanvasRenderingContext2D): void {
+    ctx.beginPath();
+    for (const region of this.scenario.paintableRegions) {
+      ctx.rect(region.x * this.scenario.width, region.y * this.scenario.height,
+        region.width * this.scenario.width, region.height * this.scenario.height);
+    }
+    ctx.clip();
+  }
+
   private renderTo(ctx: CanvasRenderingContext2D, mark: PaintMark): void {
     const x = mark.x * this.scenario.width;
     const y = mark.y * this.scenario.height;
     const radius = mark.size * this.scenario.width / 2;
     ctx.save();
+    if (mark.erase) ctx.globalCompositeOperation = 'destination-out';
     ctx.fillStyle = mark.color;
     ctx.globalAlpha = mark.opacity ?? 1;
+    ctx.save();
+    this.clipPaintable(ctx);
     if (mark.texture === 'spray') {
-      // Position-seeded speckles replay identically without storing random pixels.
-      let seed = (Math.round(mark.x * 1e6) ^ Math.round(mark.y * 1e6)) >>> 0;
-      const random = (): number => {
-        seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
-        return seed / 4294967296;
-      };
-      ctx.globalAlpha = (mark.opacity ?? 1) * 0.45;
-      for (let i = 0; i < 24; i++) {
-        const angle = random() * Math.PI * 2;
-        const distance = Math.sqrt(random()) * radius * 0.9;
-        ctx.beginPath();
-        ctx.arc(x + Math.cos(angle) * distance, y + Math.sin(angle) * distance,
-          radius * 0.065, 0, Math.PI * 2);
-        ctx.fill();
-      }
+      stampSpray(ctx, x, y, radius, mark.opacity ?? 1, mark, 0, this.scenario.height);
+    } else if (mark.texture === 'custom') {
+      stampCustomBrush(ctx, x, y, radius, mark.opacity ?? 1, clampCustomBrush(mark.brush));
     } else if (mark.texture === 'marker') {
+      ctx.save();
       ctx.globalAlpha = (mark.opacity ?? 1) * 0.55;
       ctx.translate(x, y);
       ctx.rotate(-Math.PI / 6);
       ctx.fillRect(-radius, -radius * 0.3, radius * 2, radius * 0.6);
+      ctx.restore();
     } else {
       ctx.beginPath();
       ctx.arc(x, y, radius, 0, Math.PI * 2);
       ctx.fill();
     }
+    ctx.restore();
+    if (!mark.erase) stampDrip(ctx, x, y, radius, mark.opacity ?? 1, mark.drip ?? 0, this.scenario.height, mark);
     ctx.restore();
   }
 
@@ -370,6 +395,7 @@ export class TrainPainter {
   private handleBlur = (): void => { this.cancel(); };
 
   private cancel = (commit = true): void => {
+    this.stopSprayFx();
     const pointer = this.activePointer;
     this.hidePreview();
     if (pointer !== null && this.canvas.hasPointerCapture(pointer)) this.canvas.releasePointerCapture(pointer);
@@ -382,11 +408,46 @@ export class TrainPainter {
     }
   };
 
+  private isNoopEraseStroke(): boolean {
+    return this.currentStroke.marks.every(mark => mark.erase) &&
+      !flattenVisibleMarks(this.document).some(mark => !mark.erase);
+  }
+
+  private discardCurrentStrokeMarks(): void {
+    const layer = this.document.layers.find(item => item.id === this.currentStroke.layerId);
+    if (!layer) return;
+    layer.marks.splice(Math.max(0, layer.marks.length - this.currentStroke.marks.length), this.currentStroke.marks.length);
+  }
+
+  private startSprayFx(): void {
+    if (this.tool.erase) return;
+    this.sprayAudio.start();
+    if (this.sprayPump !== undefined || typeof window.setInterval !== 'function') return;
+    this.sprayPump = window.setInterval(() => {
+      if (this.previous) this.paint(this.previous);
+    }, 40);
+  }
+
+  private stopSprayFx(): void {
+    if (this.sprayPump !== undefined) {
+      window.clearInterval(this.sprayPump);
+      this.sprayPump = undefined;
+    }
+    this.sprayAudio.stop();
+  }
+
   private completeStroke(): void {
+    this.stopSprayFx();
     const pointer = this.activePointer;
     this.activePointer = null;
     this.previous = null;
     if (pointer !== null && this.canvas.hasPointerCapture(pointer)) this.canvas.releasePointerCapture(pointer);
+    if (this.currentStroke.marks.length && this.isNoopEraseStroke()) {
+      this.discardCurrentStrokeMarks();
+      this.currentStroke = { layerId: '', marks: [] };
+      this.notifyHistoryChange();
+      return;
+    }
     if (this.currentStroke.marks.length) {
       this.undoStack.push({ layerId: this.currentStroke.layerId, marks: this.currentStroke.marks.map(mark => ({ ...mark })) });
       this.redoStack = [];
@@ -399,6 +460,7 @@ export class TrainPainter {
 
   destroy(): void {
     this.cancel();
+    this.sprayAudio.dispose();
     this.canvas.removeEventListener('pointerdown', this.start);
     this.canvas.removeEventListener('pointerenter', this.preview);
     this.canvas.removeEventListener('pointermove', this.move);

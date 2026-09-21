@@ -27,6 +27,31 @@ describe('artwork storage', () => {
     expect(saveArtwork(cleared, storage)).toBe(true);
     expect(loadArtwork(storage).snapshot).toEqual(cleared);
   });
+  it('persists wheel colors that were stored as hsl', () => {
+    const hsl: ArtworkSnapshot = {
+      marks: [{ x: 0.5, y: 0.5, size: 0.025, opacity: 0.8, color: 'hsl(0 100% 52%)' as '#e2483d', texture: 'solid' }],
+      updatedAt: '2026-09-17T12:00:00.000Z',
+    };
+    const storage = memory();
+    expect(saveArtwork(hsl, storage)).toBe(true);
+    expect(loadArtwork(storage).snapshot?.marks[0].color).toBe('#ff0a0a');
+  });
+  it('round trips a crafted custom marker stamp', () => {
+    const custom: ArtworkSnapshot = {
+      marks: [{
+        x: 0.5, y: 0.5, size: 0.025, opacity: 0.8, color: '#e2483d', texture: 'custom',
+        brush: { angle: 18, aspect: 0.4, tip: 'square', softness: 0.2 },
+      }],
+      updatedAt: '2026-09-17T12:00:00.000Z',
+    };
+    const storage = memory();
+    expect(saveArtwork(custom, storage)).toBe(true);
+    expect(loadArtwork(storage)).toEqual({ snapshot: custom, status: 'loaded' });
+    expect(saveArtwork({
+      ...custom,
+      marks: [{ ...custom.marks[0], brush: { angle: 18, aspect: 0.4, tip: 'fan' as 'chisel', softness: 0.2 } }],
+    }, storage)).toBe(false);
+  });
   it('keeps accepting existing flat mark snapshots without stroke history metadata', () => {
     const rawFlatSnapshot = JSON.stringify({ marks: [snapshot.marks[0]], updatedAt: snapshot.updatedAt });
     expect(loadArtwork(memory(rawFlatSnapshot))).toEqual({
