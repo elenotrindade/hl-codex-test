@@ -23,7 +23,11 @@ export const DEFAULT_LAYER_NAME = 'Paint layer 1';
 export type ArtworkSnapshot = { marks: PaintMark[]; updatedAt: string };
 
 function cloneMark(mark: PaintMark): PaintMark {
-  return mark.brush ? { ...mark, brush: { ...mark.brush } } : { ...mark };
+  const next = { ...mark };
+  if (mark.brush) next.brush = { ...mark.brush };
+  if (mark.shape) next.shape = { ...mark.shape };
+  if (mark.text) next.text = { ...mark.text };
+  return next;
 }
 
 function timestamp(updatedAt = new Date().toISOString()): string { return updatedAt; }

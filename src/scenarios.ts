@@ -48,11 +48,20 @@ export const scenarios: readonly PaintScenario[] = [
     template() { return photoTemplate(this); } },
 ];
 
+function regionContains(region: PaintRegion, point: Point): boolean {
+  return point.x >= region.x && point.x <= region.x + region.width &&
+    point.y >= region.y && point.y <= region.y + region.height;
+}
+
 export function isInsidePaintableArea(scenario: PaintScenario, point: Point): boolean {
   return Number.isFinite(point.x) && Number.isFinite(point.y) && scenario.paintableRegions.some(region =>
-    point.x >= region.x && point.x <= region.x + region.width &&
-    point.y >= region.y && point.y <= region.y + region.height,
+    regionContains(region, point),
   );
+}
+
+export function paintableDripFloor(scenario: PaintScenario, point: Point): number {
+  const region = scenario.paintableRegions.find(item => regionContains(item, point));
+  return region ? Math.max(0, region.y + region.height - point.y) : 0;
 }
 
 export function getScenario(id: ScenarioId): PaintScenario {

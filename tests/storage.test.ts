@@ -1,11 +1,18 @@
 import { describe, expect, it } from 'vitest';
 import { ARTWORK_KEY, loadArtwork, loadArtworkDocument, saveArtwork, type ArtworkSnapshot } from '../src/storage';
-import { TEXTURES } from '../src/train-painter';
+import { TEXTURES, type PaintMark, type TextureId } from '../src/train-painter';
 import { getScenario } from '../src/scenarios';
 import { documentFromSnapshot } from '../src/artwork-document';
 
+function sampleMark(texture: TextureId): PaintMark {
+  const mark: PaintMark = { x: 0.5, y: 0.5, size: 0.025, opacity: 0.8, color: '#e2483d', texture };
+  if (texture === 'shape') mark.shape = { kind: 'rect', x2: 0.7, y2: 0.6, fill: true };
+  if (texture === 'text') mark.text = { value: 'YARD', font: 'impact' };
+  return mark;
+}
+
 const snapshot: ArtworkSnapshot = {
-  marks: TEXTURES.map(texture => ({ x: 0.5, y: 0.5, size: 0.025, opacity: 0.8, color: '#e2483d', texture })),
+  marks: TEXTURES.map(sampleMark),
   updatedAt: '2026-09-17T12:00:00.000Z',
 };
 function memory(raw: string | null = null) {

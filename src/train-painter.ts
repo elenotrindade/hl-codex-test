@@ -1,20 +1,51 @@
-import { getScenario, isInsidePaintableArea, type PaintScenario } from './scenarios';
+import { getScenario, isInsidePaintableArea, paintableDripFloor, type PaintScenario } from './scenarios';
 import { type Point } from './train-template';
 import { cloneArtworkDocument, createDefaultArtworkDocument, createLayer as addDocumentLayer, deleteLayer as deleteDocumentLayer, duplicateLayer as duplicateDocumentLayer, flattenVisibleMarks, getActiveLayer, moveLayer as moveDocumentLayer, renameLayer as renameDocumentLayer, selectLayer, setLayerLocked as setDocumentLayerLocked, setLayerVisible as setDocumentLayerVisible, touchDocument, type ArtworkDocument } from './artwork-document';
 
 import { clampCustomBrush, stampCustomBrush, type CustomBrush } from './custom-brush';
 import { clamp, paintColorHex } from './color-tools';
+import { clampEditorText, drawShapeStamp, drawTextStamp, type EditorFontId, type ShapeKind, type ShapeStamp, type TextStamp } from './editor-tools';
+import { hitShapeBody, hitShapeHandle, moveShapeMark, resizeShapeMark, shapeBox, shapeHandlePoints, type ShapeHandleId } from './shape-edit';
 import { SprayCanAudio } from './spray-audio';
 import { SPRAY_CLICK_BURST, sprayDripLength, stampDrip, stampSpray } from './spray-physics';
 
-export const TEXTURES = ['solid', 'spray', 'marker', 'custom'] as const;
+export const BRUSH_TEXTURES = ['solid', 'spray', 'marker', 'custom'] as const;
+export const TEXTURES = [...BRUSH_TEXTURES, 'shape', 'text'] as const;
 export type TextureId = typeof TEXTURES[number];
-export type ToolState = { color: string; texture: TextureId; brushSize: number; opacity: number; weight: number; drip?: number; erase?: boolean; brush?: CustomBrush };
+export type ToolState = {
+  color: string; texture: TextureId; brushSize: number; opacity: number; weight: number; drip?: number; erase?: boolean; brush?: CustomBrush;
+  shapeKind?: ShapeKind; shapeFill?: boolean; text?: string; font?: EditorFontId; adjust?: boolean;
+};
 // Positions and diameter are normalized; size is a fraction of train width.
-export type PaintMark = Point & { color: string; texture: TextureId; size: number; opacity: number; erase?: boolean; brush?: CustomBrush; drip?: number };
+export type PaintMark = Point & {
+  color: string; texture: TextureId; size: number; opacity: number; erase?: boolean; brush?: CustomBrush; drip?: number;
+  shape?: ShapeStamp; text?: TextStamp;
+};
 export type CursorPreviewState = { visible: boolean; x: number; y: number; size: number; color: string; opacity: number };
 export type HistoryState = { canUndo: boolean; canRedo: boolean };
+export type ShapeEditFrame = {
+  box: { x: number; y: number; width: number; height: number };
+  handles: { id: ShapeHandleId; x: number; y: number }[];
+  size: number;
+  opacity: number;
+};
 type LayerPaintStroke = { layerId: string; marks: PaintMark[] };
+type ReplaceStroke = { type: 'replace'; layerId: string; index: number; before: PaintMark; after: PaintMark };
+type HistoryEntry = LayerPaintStroke | ReplaceStroke;
+type ShapeSelection = { layerId: string; index: number };
+type AdjustDrag = { kind: 'resize'; handle: ShapeHandleId } | { kind: 'move'; last: Point };
+
+function copyPaintMark(mark: PaintMark): PaintMark {
+  const next = { ...mark };
+  if (mark.brush) next.brush = { ...mark.brush };
+  if (mark.shape) next.shape = { ...mark.shape };
+  if (mark.text) next.text = { ...mark.text };
+  return next;
+}
+
+function isReplaceStroke(entry: HistoryEntry): entry is ReplaceStroke {
+  return 'type' in entry && entry.type === 'replace';
+}
 
 function applyPhotoLighting(context: CanvasRenderingContext2D, width: number, height: number): void {
   if (typeof context.createLinearGradient !== 'function' || typeof context.createRadialGradient !== 'function') return;
@@ -45,18 +76,33 @@ export function createPaintMark(point: Point, tool: ToolState, pressure = 0): Pa
   };
   if (tool.erase) mark.erase = true;
   if (tool.texture === 'custom') mark.brush = clampCustomBrush(tool.brush);
+  if (tool.texture === 'shape') {
+    mark.shape = { kind: tool.shapeKind ?? 'rect', x2: point.x, y2: point.y, fill: tool.shapeFill !== false };
+  }
+  if (tool.texture === 'text') {
+    const value = clampEditorText(tool.text ?? 'YARD');
+    if (value) mark.text = { value, font: tool.font ?? 'impact' };
+  }
   return mark;
+}
+
+function isPlacementTexture(texture: TextureId): boolean {
+  return texture === 'shape' || texture === 'text';
 }
 
 export class TrainPainter {
   private readonly context: CanvasRenderingContext2D;
   private document: ArtworkDocument;
   private currentStroke: LayerPaintStroke = { layerId: '', marks: [] };
-  private undoStack: LayerPaintStroke[] = [];
-  private redoStack: LayerPaintStroke[] = [];
+  private historyBase: LayerPaintStroke[] = [];
+  private undoStack: HistoryEntry[] = [];
+  private redoStack: HistoryEntry[] = [];
   private activePointer: number | null = null;
   private previous: Point | null = null;
   private tool: ToolState;
+  private selection: ShapeSelection | null = null;
+  private editBefore: PaintMark | null = null;
+  private adjustDrag: AdjustDrag | null = null;
   private readonly emitLegacyMarks: boolean;
   private resizeObserver?: ResizeObserver;
   private resolutionQuery?: MediaQueryList;
@@ -67,7 +113,8 @@ export class TrainPainter {
     private readonly onChange: (document: ArtworkDocument | PaintMark[]) => void = () => {}, initialDocument: ArtworkDocument | PaintMark[] = createDefaultArtworkDocument(),
     private scenario: PaintScenario = getScenario('train'),
     private readonly onCursorChange: (state: CursorPreviewState) => void = () => {},
-    private readonly onHistoryChange: (state: HistoryState) => void = () => {}) {
+    private readonly onHistoryChange: (state: HistoryState) => void = () => {},
+    private readonly onShapeEdit: (frame: ShapeEditFrame | null) => void = () => {}) {
     const context = canvas.getContext('2d');
     if (!context) throw new Error('Canvas painting is unavailable in this browser.');
     this.context = context;
@@ -77,8 +124,7 @@ export class TrainPainter {
       ? createDefaultArtworkDocument()
       : cloneArtworkDocument(initialDocument);
     if (Array.isArray(initialDocument)) this.document.layers[0].marks = initialDocument.map(mark => ({ ...mark }));
-    const activeLayer = getActiveLayer(this.document);
-    this.undoStack = activeLayer && activeLayer.marks.length ? [{ layerId: activeLayer.id, marks: activeLayer.marks.map(mark => ({ ...mark })) }] : [];
+    this.resetHistoryBase();
     this.resize();
     if (typeof ResizeObserver !== 'undefined') {
       this.resizeObserver = new ResizeObserver(this.handleResize);
@@ -98,8 +144,14 @@ export class TrainPainter {
   }
 
   setTool(tool: ToolState): void {
+    const editing = this.tool.texture === 'shape' || Boolean(this.tool.adjust);
     this.tool = { ...tool };
+    if (editing && this.tool.texture !== 'shape' && !this.tool.adjust) this.clearSelection();
     if (this.tool.erase) this.stopSprayFx();
+  }
+
+  setSprayAudioEnabled(enabled: boolean): void {
+    this.sprayAudio.setEnabled(enabled);
   }
 
   setScenario(scenario: PaintScenario, document: ArtworkDocument | PaintMark[] = createDefaultArtworkDocument()): void {
@@ -108,9 +160,8 @@ export class TrainPainter {
     this.document = Array.isArray(document) ? createDefaultArtworkDocument() : cloneArtworkDocument(document);
     if (Array.isArray(document)) this.document.layers[0].marks = document.map(mark => ({ ...mark }));
     this.currentStroke = { layerId: '', marks: [] };
-    const activeLayer = getActiveLayer(this.document);
-    this.undoStack = activeLayer && activeLayer.marks.length ? [{ layerId: activeLayer.id, marks: activeLayer.marks.map(mark => ({ ...mark })) }] : [];
-    this.redoStack = [];
+    this.clearSelection();
+    this.resetHistoryBase();
     this.context.clearRect(0, 0, this.scenario.width, this.scenario.height);
     this.resize(true);
     this.notifyHistoryChange();
@@ -123,6 +174,7 @@ export class TrainPainter {
   setActiveLayer(layerId: string): void {
     this.cancel();
     if (!selectLayer(this.document, layerId)) return;
+    this.clearSelection();
     this.emitChange(false);
   }
 
@@ -153,7 +205,9 @@ export class TrainPainter {
 
   duplicateLayer(layerId: string): void {
     this.cancel();
-    if (!duplicateDocumentLayer(this.document, layerId)) return;
+    const layer = duplicateDocumentLayer(this.document, layerId);
+    if (!layer) return;
+    if (layer.marks.length) this.historyBase.push({ layerId: layer.id, marks: layer.marks.map(mark => ({ ...mark })) });
     this.resize(true);
     this.emitChange(false);
   }
@@ -168,6 +222,10 @@ export class TrainPainter {
   deleteLayer(layerId: string): void {
     this.cancel();
     if (!deleteDocumentLayer(this.document, layerId)) return;
+    this.historyBase = this.historyBase.filter(stroke => stroke.layerId !== layerId);
+    this.undoStack = this.undoStack.filter(stroke => stroke.layerId !== layerId);
+    this.redoStack = this.redoStack.filter(stroke => stroke.layerId !== layerId);
+    this.clearSelection();
     this.resize(true);
     this.emitChange(false);
   }
@@ -180,7 +238,7 @@ export class TrainPainter {
     this.cancel();
     const stroke = this.undoStack.pop();
     if (!stroke) return;
-    this.redoStack.push({ layerId: stroke.layerId, marks: stroke.marks.map(mark => ({ ...mark })) });
+    this.redoStack.push(this.cloneHistoryEntry(stroke));
     this.replayFromHistory();
     this.emitChange();
   }
@@ -189,7 +247,7 @@ export class TrainPainter {
     this.cancel();
     const stroke = this.redoStack.pop();
     if (!stroke) return;
-    this.undoStack.push({ layerId: stroke.layerId, marks: stroke.marks.map(mark => ({ ...mark })) });
+    this.undoStack.push(this.cloneHistoryEntry(stroke));
     this.replayFromHistory();
     this.emitChange();
   }
@@ -252,8 +310,10 @@ export class TrainPainter {
     if (activeLayer) activeLayer.marks = [];
     this.cancel(false);
     this.currentStroke = { layerId: '', marks: [] };
+    this.historyBase = [];
     this.undoStack = [];
     this.redoStack = [];
+    this.clearSelection();
     this.context.clearRect(0, 0, this.scenario.width, this.scenario.height);
     this.resize(true);
     this.emitChange();
@@ -267,12 +327,18 @@ export class TrainPainter {
   private start = (event: PointerEvent): void => {
     if (this.activePointer !== null || !event.isPrimary || event.button !== 0) return;
     const point = this.point(event);
+    if (this.tool.adjust) {
+      this.startAdjust(event, point);
+      return;
+    }
     if (!isInsidePaintableArea(this.scenario, point)) return;
+    if (this.tool.texture === 'shape') this.clearSelection();
     try { this.canvas.setPointerCapture(event.pointerId); } catch { /* synthetic events may not capture */ }
     this.activePointer = event.pointerId;
     this.previous = point;
     this.currentStroke = { layerId: '', marks: [] };
     this.paint(point, event.pressure);
+    if (isPlacementTexture(this.tool.texture)) return;
     if (!this.tool.erase) {
       for (let i = 1; i < SPRAY_CLICK_BURST; i++) this.paint(point, event.pressure);
     }
@@ -284,6 +350,20 @@ export class TrainPainter {
     if (event.pointerId !== this.activePointer) return;
     if (event.buttons === 0) { this.cancel(); return; }
     const point = this.point(event);
+    if (this.adjustDrag?.kind === 'resize') {
+      this.resizeSelectedHandle(this.adjustDrag.handle, point);
+      return;
+    }
+    if (this.adjustDrag?.kind === 'move') {
+      this.moveSelectedShape(point.x - this.adjustDrag.last.x, point.y - this.adjustDrag.last.y);
+      this.adjustDrag = { kind: 'move', last: point };
+      return;
+    }
+    if (this.tool.texture === 'text') return;
+    if (this.tool.texture === 'shape') {
+      if (isInsidePaintableArea(this.scenario, point)) this.reviseShape(point);
+      return;
+    }
     if (!isInsidePaintableArea(this.scenario, point)) { this.previous = null; return; }
     const previous = this.previous ?? point;
     const distance = Math.hypot((point.x - previous.x) * this.scenario.width, (point.y - previous.y) * this.scenario.height);
@@ -300,23 +380,63 @@ export class TrainPainter {
     const activeLayer = getActiveLayer(this.document);
     if (!activeLayer || activeLayer.locked) return;
     const mark = createPaintMark(point, this.tool, pressure);
-    if (!mark.erase) {
-      const drip = sprayDripLength(point, this.currentStroke.marks, { ...mark, dripAmount: this.tool.drip ?? 1 });
+    if (this.tool.texture === 'text' && !mark.text) return;
+    if (!mark.erase && !isPlacementTexture(mark.texture)) {
+      const drip = sprayDripLength(point, this.currentStroke.marks, {
+        ...mark, dripAmount: this.tool.drip ?? 1, floor: paintableDripFloor(this.scenario, point),
+      });
       if (drip > 0) mark.drip = drip;
     }
     activeLayer.marks.push(mark);
     if (!this.currentStroke.layerId) this.currentStroke.layerId = activeLayer.id;
-    this.currentStroke.marks.push({ ...mark });
+    const stamped = { ...mark };
+    if (mark.shape) stamped.shape = { ...mark.shape };
+    if (mark.text) stamped.text = { ...mark.text };
+    this.currentStroke.marks.push(stamped);
     this.render(mark);
+  }
+
+  private reviseShape(point: Point): void {
+    const current = this.currentStroke.marks[0];
+    if (!current?.shape) return;
+    const next: PaintMark = { ...current, shape: { ...current.shape, x2: point.x, y2: point.y } };
+    this.currentStroke.marks[0] = next;
+    const layer = this.document.layers.find(item => item.id === this.currentStroke.layerId);
+    if (layer?.marks.length) layer.marks[layer.marks.length - 1] = { ...next, shape: { ...next.shape! } };
+    this.resize(true);
+  }
+
+  private resetHistoryBase(): void {
+    this.historyBase = this.document.layers
+      .filter(layer => layer.marks.length)
+      .map(layer => ({ layerId: layer.id, marks: layer.marks.map(mark => ({ ...mark })) }));
+    this.undoStack = [];
+    this.redoStack = [];
   }
 
   private replayFromHistory(): void {
     for (const layer of this.document.layers) layer.marks = [];
-    for (const stroke of this.undoStack) {
-      const layer = this.document.layers.find(item => item.id === stroke.layerId);
-      if (layer) layer.marks.push(...stroke.marks.map(mark => ({ ...mark })));
-    }
+    for (const stroke of this.historyBase) this.applyHistoryEntry(stroke);
+    for (const stroke of this.undoStack) this.applyHistoryEntry(stroke);
     this.resize(true);
+    this.keepSelection();
+  }
+
+  private applyHistoryEntry(entry: HistoryEntry): void {
+    const layer = this.document.layers.find(item => item.id === entry.layerId);
+    if (!layer) return;
+    if (isReplaceStroke(entry)) {
+      if (layer.marks[entry.index]) layer.marks[entry.index] = copyPaintMark(entry.after);
+      return;
+    }
+    layer.marks.push(...entry.marks.map(copyPaintMark));
+  }
+
+  private cloneHistoryEntry(entry: HistoryEntry): HistoryEntry {
+    if (isReplaceStroke(entry)) {
+      return { type: 'replace', layerId: entry.layerId, index: entry.index, before: copyPaintMark(entry.before), after: copyPaintMark(entry.after) };
+    }
+    return { layerId: entry.layerId, marks: entry.marks.map(copyPaintMark) };
   }
 
   private emitChange(touch = true): void {
@@ -356,7 +476,15 @@ export class TrainPainter {
     ctx.globalAlpha = mark.opacity ?? 1;
     ctx.save();
     this.clipPaintable(ctx);
-    if (mark.texture === 'spray') {
+    if (mark.texture === 'shape' && mark.shape) {
+      drawShapeStamp(ctx, {
+        ...mark.shape,
+        x2: mark.shape.x2 * this.scenario.width,
+        y2: mark.shape.y2 * this.scenario.height,
+      }, x, y, mark.size * this.scenario.width, mark.color);
+    } else if (mark.texture === 'text' && mark.text) {
+      drawTextStamp(ctx, mark.text, x, y, mark.size * this.scenario.width, mark.color);
+    } else if (mark.texture === 'spray') {
       stampSpray(ctx, x, y, radius, mark.opacity ?? 1, mark, 0, this.scenario.height);
     } else if (mark.texture === 'custom') {
       stampCustomBrush(ctx, x, y, radius, mark.opacity ?? 1, clampCustomBrush(mark.brush));
@@ -372,8 +500,8 @@ export class TrainPainter {
       ctx.arc(x, y, radius, 0, Math.PI * 2);
       ctx.fill();
     }
+    if (!mark.erase && !isPlacementTexture(mark.texture)) stampDrip(ctx, x, y, radius, mark.opacity ?? 1, mark.drip ?? 0, this.scenario.height, mark);
     ctx.restore();
-    if (!mark.erase) stampDrip(ctx, x, y, radius, mark.opacity ?? 1, mark.drip ?? 0, this.scenario.height, mark);
     ctx.restore();
   }
 
@@ -383,6 +511,10 @@ export class TrainPainter {
   };
 
   private preview = (event: PointerEvent): void => {
+    if (this.tool.adjust) {
+      this.hidePreview();
+      return;
+    }
     const point = this.point(event);
     this.onCursorChange({ visible: isInsidePaintableArea(this.scenario, point), x: point.x, y: point.y,
       size: createPaintMark(point, this.tool, event.pressure).size, color: this.tool.color, opacity: this.tool.opacity });
@@ -442,6 +574,10 @@ export class TrainPainter {
     this.activePointer = null;
     this.previous = null;
     if (pointer !== null && this.canvas.hasPointerCapture(pointer)) this.canvas.releasePointerCapture(pointer);
+    if (this.adjustDrag) {
+      this.commitShapeEdit();
+      return;
+    }
     if (this.currentStroke.marks.length && this.isNoopEraseStroke()) {
       this.discardCurrentStrokeMarks();
       this.currentStroke = { layerId: '', marks: [] };
@@ -449,13 +585,155 @@ export class TrainPainter {
       return;
     }
     if (this.currentStroke.marks.length) {
-      this.undoStack.push({ layerId: this.currentStroke.layerId, marks: this.currentStroke.marks.map(mark => ({ ...mark })) });
+      this.undoStack.push({ layerId: this.currentStroke.layerId, marks: this.currentStroke.marks.map(copyPaintMark) });
       this.redoStack = [];
+      const placed = this.currentStroke.marks.length === 1 ? this.currentStroke.marks[0] : null;
+      const layerId = this.currentStroke.layerId;
       this.currentStroke = { layerId: '', marks: [] };
+      if (placed?.shape) {
+        const layer = this.document.layers.find(item => item.id === layerId);
+        if (layer) this.selection = { layerId, index: layer.marks.length - 1 };
+      }
+      this.emitShapeEdit();
       this.emitChange();
     } else {
       this.notifyHistoryChange();
     }
+  }
+
+  beginShapeEdit(): void {
+    const mark = this.selectedMark();
+    if (!mark || this.editBefore) return;
+    this.editBefore = copyPaintMark(mark);
+  }
+
+  resizeSelectedHandle(handle: ShapeHandleId, point: Point): void {
+    const mark = this.selectedMark();
+    if (!mark || !this.selection) return;
+    const next = resizeShapeMark(mark, handle, point);
+    if (!this.cornersInside(next)) return;
+    this.writeSelected(next);
+  }
+
+  moveSelectedShape(dx: number, dy: number): void {
+    const mark = this.selectedMark();
+    if (!mark || !this.selection) return;
+    const next = moveShapeMark(mark, dx, dy);
+    if (!this.cornersInside(next)) return;
+    this.writeSelected(next);
+  }
+
+  setSelectedPaint(patch: { size?: number; opacity?: number }): void {
+    const mark = this.selectedMark();
+    if (!mark) return;
+    const size = patch.size === undefined ? mark.size : clamp(patch.size, 0.003, 0.12);
+    const opacity = patch.opacity === undefined ? mark.opacity : clamp(patch.opacity, 0.05, 1);
+    if (size === mark.size && opacity === mark.opacity) return;
+    this.writeSelected({ ...copyPaintMark(mark), size, opacity });
+  }
+
+  commitShapeEdit(): void {
+    const current = this.selectedMark();
+    const before = this.editBefore;
+    this.editBefore = null;
+    this.adjustDrag = null;
+    if (!this.selection || !before?.shape || !current?.shape) return;
+    const changed = before.x !== current.x || before.y !== current.y ||
+      before.shape.x2 !== current.shape.x2 || before.shape.y2 !== current.shape.y2 ||
+      before.size !== current.size || before.opacity !== current.opacity;
+    if (!changed) return;
+    this.undoStack.push({
+      type: 'replace', layerId: this.selection.layerId, index: this.selection.index,
+      before: copyPaintMark(before), after: copyPaintMark(current),
+    });
+    this.redoStack = [];
+    this.emitChange();
+  }
+
+  private startAdjust(event: PointerEvent, point: Point): void {
+    const handle = this.selectedMark() ? hitShapeHandle(this.selectedMark()!, point) : null;
+    if (handle && this.selection) {
+      try { this.canvas.setPointerCapture(event.pointerId); } catch { /* synthetic events may not capture */ }
+      this.activePointer = event.pointerId;
+      this.beginShapeEdit();
+      this.adjustDrag = { kind: 'resize', handle };
+      return;
+    }
+    if (this.selectShapeAt(point)) {
+      try { this.canvas.setPointerCapture(event.pointerId); } catch { /* synthetic events may not capture */ }
+      this.activePointer = event.pointerId;
+      this.beginShapeEdit();
+      this.adjustDrag = { kind: 'move', last: point };
+      return;
+    }
+    this.clearSelection();
+  }
+
+  private selectShapeAt(point: Point): boolean {
+    const layer = getActiveLayer(this.document);
+    if (!layer || layer.locked || !layer.visible) return false;
+    for (let index = layer.marks.length - 1; index >= 0; index -= 1) {
+      if (!hitShapeBody(layer.marks[index], point)) continue;
+      this.selection = { layerId: layer.id, index };
+      this.editBefore = null;
+      this.emitShapeEdit();
+      return true;
+    }
+    return false;
+  }
+
+  private selectedMark(): PaintMark | null {
+    const selection = this.selection;
+    if (!selection) return null;
+    const layer = this.document.layers.find(item => item.id === selection.layerId);
+    const mark = layer?.marks[selection.index];
+    const active = getActiveLayer(this.document);
+    if (!layer || !mark?.shape || mark.erase || !active || active.locked || !active.visible || active.id !== layer.id) return null;
+    return mark;
+  }
+
+  private cornersInside(mark: PaintMark): boolean {
+    return Boolean(mark.shape) && isInsidePaintableArea(this.scenario, mark) &&
+      isInsidePaintableArea(this.scenario, { x: mark.shape!.x2, y: mark.shape!.y2 });
+  }
+
+  private writeSelected(next: PaintMark): void {
+    const selection = this.selection;
+    if (!selection) return;
+    const layer = this.document.layers.find(item => item.id === selection.layerId);
+    const current = layer?.marks[selection.index];
+    if (!layer || !current) return;
+    if (!this.editBefore) this.editBefore = copyPaintMark(current);
+    layer.marks[selection.index] = copyPaintMark(next);
+    this.resize(true);
+    this.emitShapeEdit();
+  }
+
+  private clearSelection(): void {
+    this.selection = null;
+    this.editBefore = null;
+    this.adjustDrag = null;
+    this.emitShapeEdit();
+  }
+
+  private keepSelection(): void {
+    if (!this.selectedMark()) this.selection = null;
+    this.emitShapeEdit();
+  }
+
+  private emitShapeEdit(): void {
+    const mark = this.selectedMark();
+    const box = mark ? shapeBox(mark) : null;
+    if (!mark || !box) {
+      this.onShapeEdit(null);
+      return;
+    }
+    this.onShapeEdit({
+      box: { x: box.left, y: box.top, width: box.right - box.left, height: box.bottom - box.top },
+      handles: shapeHandlePoints(mark),
+      size: mark.size,
+      opacity: mark.opacity ?? 1,
+    });
   }
 
   destroy(): void {

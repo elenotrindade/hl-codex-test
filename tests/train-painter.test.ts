@@ -1,17 +1,19 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createPaintMark, TEXTURES, TrainPainter, type ToolState } from '../src/train-painter';
+import { createPaintMark, BRUSH_TEXTURES, TEXTURES, TrainPainter, type ToolState } from '../src/train-painter';
 import { dripSteps, SPRAY_CLICK_BURST, sprayDripLength } from '../src/spray-physics';
-import { getScenario } from '../src/scenarios';
+import { getScenario, paintableDripFloor, type PaintScenario } from '../src/scenarios';
 import { documentFromSnapshot, type ArtworkDocument } from '../src/artwork-document';
 
 const tool: ToolState = { color: '#e2483d', texture: 'solid', brushSize: 0.025, opacity: 0.8, weight: 1 };
 
-function clickStroke(point: { x: number; y: number }, current: ToolState) {
+function clickStroke(point: { x: number; y: number }, current: ToolState, scenario: PaintScenario = getScenario('train')) {
   const marks: ReturnType<typeof createPaintMark>[] = [];
   for (let i = 0; i < SPRAY_CLICK_BURST; i++) {
     const mark = createPaintMark(point, current);
     if (!current.erase) {
-      const drip = sprayDripLength(point, marks, { ...mark, dripAmount: current.drip ?? 1 });
+      const drip = sprayDripLength(point, marks, {
+        ...mark, dripAmount: current.drip ?? 1, floor: paintableDripFloor(scenario, point),
+      });
       if (drip > 0) mark.drip = drip;
     }
     marks.push(mark);
@@ -21,7 +23,7 @@ function clickStroke(point: { x: number; y: number }, current: ToolState) {
 
 function setup(initial: ReturnType<typeof createPaintMark>[] | ArtworkDocument = [], windowProperties = {}, onHistory = vi.fn()) {
   const context = Object.fromEntries(['scale', 'beginPath', 'rect', 'clip', 'save', 'restore', 'arc',
-    'fill', 'stroke', 'moveTo', 'lineTo', 'closePath', 'translate', 'rotate', 'transform', 'fillRect', 'clearRect']
+    'fill', 'stroke', 'moveTo', 'lineTo', 'closePath', 'translate', 'rotate', 'transform', 'fillRect', 'clearRect', 'fillText']
     .map(name => [name, vi.fn()]));
   const canvas = new EventTarget() as HTMLCanvasElement;
   canvas.getContext = vi.fn(() => context) as unknown as HTMLCanvasElement['getContext'];
@@ -41,7 +43,7 @@ function setup(initial: ReturnType<typeof createPaintMark>[] | ArtworkDocument =
 }
 function canvasContext() {
   return Object.fromEntries(['scale', 'beginPath', 'rect', 'clip', 'save', 'restore', 'arc',
-    'fill', 'stroke', 'moveTo', 'lineTo', 'closePath', 'translate', 'rotate', 'transform', 'fillRect', 'clearRect', 'drawImage']
+    'fill', 'stroke', 'moveTo', 'lineTo', 'closePath', 'translate', 'rotate', 'transform', 'fillRect', 'clearRect', 'drawImage', 'fillText']
     .map(name => [name, vi.fn()]));
 }
 afterEach(() => vi.unstubAllGlobals());
@@ -150,7 +152,7 @@ describe('scenario-driven painting', () => {
     send('pointerdown', { clientX: 500, clientY: 110 });
     send('pointerup');
     expect(context.rect).toHaveBeenCalledWith(0, 80, 1000, 248);
-    expect(onChange).toHaveBeenCalledWith(clickStroke({ x: 0.5, y: 0.275 }, tool));
+    expect(onChange).toHaveBeenCalledWith(clickStroke({ x: 0.5, y: 0.275 }, tool, getScenario('wall')));
     onChange.mockClear();
     send('pointerdown', { clientX: 500, clientY: 340 });
     send('pointerup');
@@ -328,7 +330,7 @@ describe('paint marks and stroke lifecycle', () => {
     expect(marks.every(mark => !mark.drip)).toBe(true);
     painter.destroy();
   });
-  it.each(TEXTURES)('a %s click bursts wet paint so a drip is stored on the stroke', texture => {
+  it.each(BRUSH_TEXTURES)('a %s click bursts wet paint so a drip is stored on the stroke', texture => {
     const { painter, send, onChange } = setup();
     painter.setTool({ ...tool, texture });
     send('pointerdown');
@@ -353,6 +355,96 @@ describe('paint marks and stroke lifecycle', () => {
     expect(replay.onChange).not.toHaveBeenCalled();
     live.painter.destroy();
     replay.painter.destroy();
+  });
+
+  it('drags one rectangle and keeps the outline choice', () => {
+    const { painter, send, onChange } = setup();
+    painter.setTool({ ...tool, texture: 'shape', shapeKind: 'rect', shapeFill: false });
+    send('pointerdown', { clientX: 400, clientY: 180 });
+    send('pointermove', { clientX: 700, clientY: 240 });
+    send('pointerup');
+    const marks = onChange.mock.calls[0][0] as ReturnType<typeof createPaintMark>[];
+    expect(marks).toHaveLength(1);
+    expect(marks[0]).toMatchObject({ x: 0.4, y: 0.45, texture: 'shape', shape: { kind: 'rect', x2: 0.7, y2: 0.6, fill: false } });
+    expect(marks[0].drip).toBeUndefined();
+    painter.destroy();
+  });
+
+  it('resizes a finished ellipse from its corner and undo restores it', () => {
+    const { painter, send, onChange } = setup();
+    painter.setTool({ ...tool, texture: 'shape', shapeKind: 'ellipse', shapeFill: true });
+    send('pointerdown', { clientX: 400, clientY: 180 });
+    send('pointermove', { clientX: 700, clientY: 240 });
+    send('pointerup');
+    onChange.mockClear();
+    painter.setTool({ ...tool, adjust: true });
+    send('pointerdown', { clientX: 700, clientY: 240 });
+    send('pointermove', { clientX: 780, clientY: 260 });
+    send('pointerup');
+    const marks = onChange.mock.calls.at(-1)?.[0] as ReturnType<typeof createPaintMark>[];
+    expect(marks).toHaveLength(1);
+    expect(marks[0].shape).toMatchObject({ kind: 'ellipse', x2: 0.78, y2: 0.65 });
+    painter.undo();
+    expect(painter.getMarks()[0].shape).toMatchObject({ x2: 0.7, y2: 0.6 });
+    painter.redo();
+    expect(painter.getMarks()[0].shape).toMatchObject({ x2: 0.78, y2: 0.65 });
+    painter.destroy();
+  });
+
+  it('edits brush size and opacity on the selected shape', () => {
+    const { painter, send, onChange } = setup();
+    painter.setTool({ ...tool, texture: 'shape', shapeKind: 'rect', shapeFill: true, brushSize: 0.02, opacity: 0.9 });
+    send('pointerdown', { clientX: 400, clientY: 180 });
+    send('pointermove', { clientX: 700, clientY: 240 });
+    send('pointerup');
+    onChange.mockClear();
+    painter.setSelectedPaint({ size: 0.04, opacity: 0.4 });
+    painter.commitShapeEdit();
+    const marks = onChange.mock.calls.at(-1)?.[0] as ReturnType<typeof createPaintMark>[];
+    expect(marks[0]).toMatchObject({ size: 0.04, opacity: 0.4, shape: { x2: 0.7, y2: 0.6 } });
+    painter.undo();
+    expect(painter.getMarks()[0]).toMatchObject({ size: 0.02, opacity: 0.9 });
+    painter.destroy();
+  });
+
+  it('places one text mark and ignores the drag', () => {
+    const { painter, send, onChange } = setup();
+    painter.setTool({ ...tool, texture: 'text', text: 'HELLO', font: 'georgia' });
+    send('pointerdown');
+    send('pointermove', { clientX: 700, clientY: 240 });
+    send('pointerup');
+    const marks = onChange.mock.calls[0][0] as ReturnType<typeof createPaintMark>[];
+    expect(marks).toEqual([expect.objectContaining({ x: 0.5, y: 0.5, texture: 'text', text: { value: 'HELLO', font: 'georgia' } })]);
+    painter.destroy();
+  });
+
+  it('does not paint a blank text tool', () => {
+    const { painter, send, onChange } = setup();
+    painter.setTool({ ...tool, texture: 'text', text: '   ' });
+    send('pointerdown');
+    send('pointerup');
+    expect(onChange).not.toHaveBeenCalled();
+    painter.destroy();
+  });
+
+  it('does not wipe other layers when undoing a stroke', () => {
+    const layerTwoMark = createPaintMark({ x: 0.7, y: 0.5 }, { ...tool, color: '#24485c' });
+    const document = documentFromSnapshot({ marks: [createPaintMark({ x: 0.4, y: 0.5 }, tool)], updatedAt: '2026-09-17T12:00:00.000Z' });
+    document.layers.push({
+      id: 'paint-layer-2', name: 'Highlights', visible: true, locked: false,
+      marks: [layerTwoMark], createdAt: document.updatedAt, updatedAt: document.updatedAt,
+    });
+    const { painter, send } = setup(document);
+    expect(painter.canUndo()).toBe(false);
+    painter.setActiveLayer('paint-layer-1');
+    send('pointerdown', { clientX: 600 });
+    send('pointerup', { clientX: 600 });
+    painter.undo();
+    const restored = painter.getDocument();
+    expect(restored.layers[0].marks).toEqual([createPaintMark({ x: 0.4, y: 0.5 }, tool)]);
+    expect(restored.layers[1].marks).toEqual([layerTwoMark]);
+    expect(restored.layers).toHaveLength(2);
+    painter.destroy();
   });
 
   it('appends new strokes to the selected unlocked layer', () => {

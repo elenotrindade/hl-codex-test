@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { getScenario, isInsidePaintableArea, scenarios } from '../src/scenarios';
+import { getScenario, isInsidePaintableArea, paintableDripFloor, scenarios } from '../src/scenarios';
 
 describe('paint scenarios', () => {
   it('exposes train, wall, and vehicle scenes with shared geometry contracts', () => {
@@ -42,6 +42,8 @@ describe('paint scenarios', () => {
     expect(isInsidePaintableArea(getScenario('vehicle'), { x: 0.5, y: 0.1 })).toBe(false);
     expect(isInsidePaintableArea(getScenario('vehicle'), { x: 0.5, y: 0.3 })).toBe(true);
     expect(isInsidePaintableArea(getScenario('vehicle'), { x: 0.95, y: 0.68 })).toBe(false);
+    expect(paintableDripFloor(getScenario('train'), { x: 0.5, y: 0.3 })).toBeCloseTo(0.37);
+    expect(paintableDripFloor(getScenario('train'), { x: 0.01, y: 0.3 })).toBe(0);
   });
 
   it('looks up scenarios and falls back to train for unknown values', () => {

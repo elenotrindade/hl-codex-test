@@ -1,7 +1,9 @@
 import '@fortawesome/fontawesome-free/css/fontawesome.css';
 import '@fortawesome/fontawesome-free/css/solid.css';
 import './styles.css';
-import { TrainPainter, TEXTURES, type TextureId, type ToolState } from './train-painter';
+import { EDITOR_FONTS, SHAPE_KINDS, SHAPE_LABELS, shapeUsesFill, type EditorFontId, type ShapeKind } from './editor-tools';
+import { BOX_HANDLES, LINE_HANDLES, type ShapeHandleId } from './shape-edit';
+import { TrainPainter, BRUSH_TEXTURES, type ShapeEditFrame, type TextureId, type ToolState } from './train-painter';
 import { BRUSH_TIP_LABELS, BRUSH_TIPS, clampCustomBrush, fittedStampRadius, loadCustomBrush, saveCustomBrush, stampCustomBrush, type BrushTip } from './custom-brush';
 import { loadArtworkDocument, saveArtwork, loadGallery, saveGallery } from './storage';
 import { createDefaultArtworkDocument, getActiveLayer, type ArtworkDocument } from './artwork-document';
@@ -14,7 +16,22 @@ import { exportTrainImage, type ExportAction, type ExportOutcome } from './artwo
 import { renderLayerPanel, syncLayerStatus } from './layer-panel';
 import { findPaintCanvas } from './paint-canvas';
 
-const tool: ToolState = { color: DEFAULT_COLOR, texture: 'solid', brushSize: 0.025, opacity: 0.9, weight: 1, drip: 1, brush: loadCustomBrush() };
+const tool: ToolState = {
+  color: DEFAULT_COLOR, texture: 'solid', brushSize: 0.025, opacity: 0.9, weight: 1, drip: 0.3, brush: loadCustomBrush(),
+  shapeKind: 'rect', shapeFill: true, text: 'YARD', font: 'impact',
+};
+
+function shapeIcon(kind: ShapeKind): string {
+  const icon = {
+    rect: 'fa-square',
+    ellipse: 'fa-circle',
+    triangle: 'fa-play',
+    star: 'fa-star',
+    line: 'fa-minus',
+    arrow: 'fa-arrow-right',
+  }[kind];
+  return `<i class="fa-solid ${icon}" aria-hidden="true"></i>`;
+}
 const rankingPageSize = 3;
 let rankingPage = 0;
 let activeScenario: PaintScenario = getScenario('train');
@@ -45,9 +62,13 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
         </div>
         <div class="stage-canvas">
           <div class="paint-stage" aria-live="polite">${activeScenario.template()}<canvas aria-label="${activeScenario.ariaLabel}">Canvas support is required to paint.</canvas><div class="brush-cursor" aria-hidden="true"></div></div>
+          <div id="shape-editor" class="shape-editor" hidden>
+            <div class="shape-editor__box"></div>
+          </div>
           <div class="stage-overlay stage-overlay--brushes">
+            <div class="brush-stack">
             <div class="textures" role="group" aria-label="Paint texture">
-              ${TEXTURES.map(texture => texture === 'custom' ? `<div class="texture-custom">
+              ${BRUSH_TEXTURES.map(texture => texture === 'custom' ? `<div class="texture-custom">
                 <button type="button" data-texture="custom" aria-pressed="false" aria-expanded="false" aria-controls="custom-brush-panel" aria-label="custom">
                   <canvas id="custom-brush-preview" class="texture-sample" width="80" height="48" aria-hidden="true"></canvas>
                   <span>custom</span>
@@ -72,6 +93,26 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
                 <span>${texture}</span>
               </button>`).join('')}
             </div>
+            <div class="editor-tools" role="toolbar" aria-label="Shapes and text">
+              <button type="button" class="icon-button" id="shape-adjust" aria-pressed="false" aria-label="Adjust shape" title="Adjust shape">
+                <i class="fa-solid fa-up-down-left-right" aria-hidden="true"></i>
+              </button>
+              ${SHAPE_KINDS.map(kind => `<button type="button" class="icon-button" data-shape="${kind}" aria-pressed="false" aria-label="${SHAPE_LABELS[kind]}" title="${SHAPE_LABELS[kind]}">${shapeIcon(kind)}</button>`).join('')}
+              <button type="button" class="icon-button" id="text-tool" aria-pressed="false" aria-expanded="false" aria-controls="text-tool-panel" aria-label="Text" title="Text">
+                <i class="fa-solid fa-font" aria-hidden="true"></i>
+              </button>
+              <label class="editor-fill" id="shape-fill-label" for="shape-fill"><input id="shape-fill" type="checkbox" checked /> Fill</label>
+              <div id="text-tool-panel" class="custom-brush" hidden>
+                <label for="text-value">Words</label>
+                <input id="text-value" maxlength="48" value="YARD" autocomplete="off" />
+                <label for="text-font">Font</label>
+                <select id="text-font">
+                  ${EDITOR_FONTS.map(font => `<option value="${font.id}">${font.label}</option>`).join('')}
+                </select>
+                <p class="tool-note">Click the scene to place the words. Drag a shape to size it.</p>
+              </div>
+            </div>
+            </div>
           </div>
           <div class="stage-overlay stage-overlay--controls">
             <div class="history-actions" role="group" aria-label="Stroke history">
@@ -86,7 +127,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
               </button>
             </div>
             <div class="stage-size">
-              <label for="brush-size">Brush size <output id="size-value" for="brush-size">25</output></label>
+              <label for="brush-size"><span id="size-label">Brush size</span> <output id="size-value" for="brush-size">25</output></label>
               <input id="brush-size" type="range" min="6" max="60" value="25" aria-valuetext="25 train units" />
             </div>
           </div>
@@ -117,8 +158,12 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
         <input id="brush-opacity" type="range" min="5" max="100" value="90" aria-valuetext="90 percent" />
         <label for="brush-weight">Brush weight <output id="weight-value" for="brush-weight">1.0x</output></label>
         <input id="brush-weight" type="range" min="50" max="200" value="100" aria-valuetext="1.0 times pressure" />
-        <label for="brush-drip">Drip <output id="drip-value" for="brush-drip">100%</output></label>
-        <input id="brush-drip" type="range" min="0" max="100" value="100" aria-valuetext="100 percent" />
+        <label for="brush-drip">Drip <output id="drip-value" for="brush-drip">30%</output></label>
+        <input id="brush-drip" type="range" min="0" max="100" value="30" aria-valuetext="30 percent" />
+        <button type="button" id="spray-audio" aria-pressed="true" title="Spray sound">
+          <i class="fa-solid fa-volume-high" aria-hidden="true"></i>
+          Sound
+        </button>
         <p id="save-status" role="status" aria-live="polite"></p>
       </aside>
       <aside class="layer-panel" aria-labelledby="layers-heading">
@@ -206,7 +251,86 @@ const painter = new TrainPainter(canvas, tool, document => {
   cursor.style.setProperty('--cursor-color', tool.erase ? '#fff4db' : state.color);
   cursor.style.setProperty('--cursor-opacity', String(state.opacity));
   stage.dataset.eraser = String(Boolean(tool.erase));
-}, updateHistoryControls);
+}, updateHistoryControls, syncShapeEditor);
+const shapeEditor = document.querySelector<HTMLDivElement>('#shape-editor')!;
+const shapeEditorBox = shapeEditor.querySelector<HTMLDivElement>('.shape-editor__box')!;
+const shapeHandles = new Map<ShapeHandleId, HTMLButtonElement>();
+
+function shapePointer(event: PointerEvent): { x: number; y: number } {
+  const bounds = canvas.getBoundingClientRect();
+  return { x: (event.clientX - bounds.left) / bounds.width, y: (event.clientY - bounds.top) / bounds.height };
+}
+
+function bindShapeHandle(button: HTMLButtonElement, id: ShapeHandleId): void {
+  button.addEventListener('pointerdown', event => {
+    if (!event.isPrimary || event.button !== 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    painter.beginShapeEdit();
+    try { button.setPointerCapture(event.pointerId); } catch { /* synthetic events may not capture */ }
+    const move = (pointer: PointerEvent) => {
+      if (pointer.pointerId !== event.pointerId) return;
+      painter.resizeSelectedHandle(id, shapePointer(pointer));
+    };
+    const finish = (pointer: PointerEvent) => {
+      if (pointer.pointerId !== event.pointerId) return;
+      button.removeEventListener('pointermove', move);
+      button.removeEventListener('pointerup', finish);
+      button.removeEventListener('pointercancel', finish);
+      painter.commitShapeEdit();
+    };
+    button.addEventListener('pointermove', move);
+    button.addEventListener('pointerup', finish);
+    button.addEventListener('pointercancel', finish);
+  });
+}
+
+function syncShapeEditor(frame: ShapeEditFrame | null): void {
+  shapeEditor.hidden = !frame;
+  if (!frame) return;
+  shapeEditorBox.style.left = `${frame.box.x * 100}%`;
+  shapeEditorBox.style.top = `${frame.box.y * 100}%`;
+  shapeEditorBox.style.width = `${frame.box.width * 100}%`;
+  shapeEditorBox.style.height = `${frame.box.height * 100}%`;
+  const visible = new Set(frame.handles.map(handle => handle.id));
+  for (const [id, button] of shapeHandles) {
+    const handle = frame.handles.find(item => item.id === id);
+    button.hidden = !visible.has(id);
+    if (!handle) continue;
+    button.style.left = `${handle.x * 100}%`;
+    button.style.top = `${handle.y * 100}%`;
+  }
+  fillPaintControls(Math.round(frame.size * 1000), Math.round(frame.opacity * 100));
+}
+
+function fillPaintControls(size: number, opacity: number): void {
+  const sizeValue = Math.min(60, Math.max(6, size));
+  const opacityValue = Math.min(100, Math.max(5, opacity));
+  const sizeInput = document.querySelector<HTMLInputElement>('#brush-size')!;
+  const opacityInput = document.querySelector<HTMLInputElement>('#brush-opacity')!;
+  sizeInput.value = String(sizeValue);
+  opacityInput.value = String(opacityValue);
+  document.querySelector<HTMLOutputElement>('#size-value')!.value = String(sizeValue);
+  document.querySelector<HTMLOutputElement>('#opacity-value')!.value = `${opacityValue}%`;
+  sizeInput.setAttribute('aria-valuetext', `${sizeValue} train units`);
+  opacityInput.setAttribute('aria-valuetext', `${opacityValue} percent`);
+  tool.brushSize = sizeValue / 1000;
+  tool.opacity = opacityValue / 100;
+  painter.setTool(tool);
+  syncColorReadout();
+}
+
+for (const id of [...BOX_HANDLES, ...LINE_HANDLES]) {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'shape-editor__handle';
+  button.dataset.handle = id;
+  button.hidden = true;
+  button.setAttribute('aria-label', `Resize ${id}`);
+  shapeEditor.append(button);
+  shapeHandles.set(id, button);
+  bindShapeHandle(button, id);
+}
 renderLayers(painter.getDocument());
 document.querySelector<HTMLButtonElement>('#add-layer')!.addEventListener('click', () => {
   painter.createLayer();
@@ -309,9 +433,11 @@ document.querySelectorAll<HTMLButtonElement>('[data-texture]').forEach(button =>
     const texture = button.dataset.texture as TextureId;
     const alreadyCustom = tool.texture === 'custom' && texture === 'custom';
     tool.texture = texture;
+    tool.adjust = false;
     painter.setTool(tool);
     document.querySelectorAll('[data-texture]').forEach(chip => chip.setAttribute('aria-pressed', String(chip === button)));
     syncCustomBrushPanel(texture === 'custom' ? !alreadyCustom || customBrushPanel.hidden : false);
+    syncEditorChrome();
   });
 });
 customTip.addEventListener('change', () => commitCustomBrush());
@@ -328,6 +454,84 @@ document.addEventListener('keydown', event => {
   if (event.key === 'Escape' && !customBrushPanel.hidden) setCustomBrushOpen(false);
 });
 syncCustomBrushPanel(false);
+const textTool = document.querySelector<HTMLButtonElement>('#text-tool')!;
+const textPanel = document.querySelector<HTMLDivElement>('#text-tool-panel')!;
+const textValue = document.querySelector<HTMLInputElement>('#text-value')!;
+const textFont = document.querySelector<HTMLSelectElement>('#text-font')!;
+const shapeFill = document.querySelector<HTMLInputElement>('#shape-fill')!;
+const shapeFillLabel = document.querySelector<HTMLLabelElement>('#shape-fill-label')!;
+const sizeLabel = document.querySelector<HTMLSpanElement>('#size-label')!;
+
+function releaseBrushChips(): void {
+  document.querySelectorAll('[data-texture]').forEach(chip => chip.setAttribute('aria-pressed', 'false'));
+  setCustomBrushOpen(false);
+}
+
+function syncEditorChrome(): void {
+  const adjusting = Boolean(tool.adjust);
+  const shaping = tool.texture === 'shape' && !adjusting;
+  const writing = tool.texture === 'text' && !adjusting;
+  document.querySelector<HTMLButtonElement>('#shape-adjust')!.setAttribute('aria-pressed', String(adjusting));
+  document.querySelectorAll<HTMLButtonElement>('[data-shape]').forEach(button => {
+    button.setAttribute('aria-pressed', String(shaping && button.dataset.shape === tool.shapeKind));
+  });
+  textTool.setAttribute('aria-pressed', String(writing));
+  textTool.setAttribute('aria-expanded', String(writing));
+  textPanel.hidden = !writing;
+  shapeFillLabel.hidden = !shaping || !shapeUsesFill(tool.shapeKind ?? 'rect');
+  sizeLabel.textContent = adjusting ? 'Adjust' : writing ? 'Letter size' : shaping ? 'Stroke' : 'Brush size';
+}
+
+document.querySelector<HTMLButtonElement>('#shape-adjust')!.addEventListener('click', () => {
+  tool.adjust = true;
+  tool.erase = false;
+  painter.setTool(tool);
+  releaseBrushChips();
+  syncEditorChrome();
+  syncColorReadout();
+  syncColorPresets();
+});
+
+document.querySelectorAll<HTMLButtonElement>('[data-shape]').forEach(button => {
+  button.addEventListener('click', () => {
+    tool.texture = 'shape';
+    tool.adjust = false;
+    tool.shapeKind = button.dataset.shape as ShapeKind;
+    tool.shapeFill = shapeFill.checked;
+    tool.erase = false;
+    painter.setTool(tool);
+    releaseBrushChips();
+    syncEditorChrome();
+    syncColorReadout();
+    syncColorPresets();
+  });
+});
+textTool.addEventListener('click', () => {
+  tool.texture = 'text';
+  tool.adjust = false;
+  tool.text = textValue.value;
+  tool.font = textFont.value as EditorFontId;
+  tool.erase = false;
+  painter.setTool(tool);
+  releaseBrushChips();
+  syncEditorChrome();
+  syncColorReadout();
+  syncColorPresets();
+  textValue.focus();
+});
+shapeFill.addEventListener('change', () => {
+  tool.shapeFill = shapeFill.checked;
+  painter.setTool(tool);
+});
+textValue.addEventListener('input', () => {
+  tool.text = textValue.value;
+  painter.setTool(tool);
+});
+textFont.addEventListener('change', () => {
+  tool.font = textFont.value as EditorFontId;
+  painter.setTool(tool);
+});
+syncEditorChrome();
 const colorWheel = document.querySelector<HTMLButtonElement>('.color-wheel__surface')!;
 const colorHandle = document.querySelector<HTMLSpanElement>('.color-wheel__handle')!;
 const selectedColorHex = document.querySelector<HTMLParagraphElement>('#selected-color-hex')!;
@@ -494,21 +698,27 @@ function samplePhotoPixel(photo: HTMLImageElement, u: number, v: number): Uint8C
   return context.getImageData(0, 0, 1, 1).data;
 }
 updateSelectedColor(currentSelection);
+document.querySelector<HTMLInputElement>('#brush-size')!.addEventListener('pointerdown', () => painter.beginShapeEdit());
 document.querySelector<HTMLInputElement>('#brush-size')!.addEventListener('input', event => {
   const value = (event.target as HTMLInputElement).valueAsNumber;
   tool.brushSize = value / 1000;
   painter.setTool(tool);
+  painter.setSelectedPaint({ size: tool.brushSize });
   document.querySelector<HTMLOutputElement>('#size-value')!.value = String(value);
   (event.target as HTMLInputElement).setAttribute('aria-valuetext', `${value} train units`);
 });
+document.querySelector<HTMLInputElement>('#brush-size')!.addEventListener('change', () => painter.commitShapeEdit());
+document.querySelector<HTMLInputElement>('#brush-opacity')!.addEventListener('pointerdown', () => painter.beginShapeEdit());
 document.querySelector<HTMLInputElement>('#brush-opacity')!.addEventListener('input', event => {
   const value = (event.target as HTMLInputElement).valueAsNumber;
   tool.opacity = value / 100;
   painter.setTool(tool);
+  painter.setSelectedPaint({ opacity: tool.opacity });
   syncColorReadout();
   document.querySelector<HTMLOutputElement>('#opacity-value')!.value = `${value}%`;
   (event.target as HTMLInputElement).setAttribute('aria-valuetext', `${value} percent`);
 });
+document.querySelector<HTMLInputElement>('#brush-opacity')!.addEventListener('change', () => painter.commitShapeEdit());
 document.querySelector<HTMLInputElement>('#brush-weight')!.addEventListener('input', event => {
   const value = (event.target as HTMLInputElement).valueAsNumber / 100;
   tool.weight = value;
@@ -522,6 +732,14 @@ document.querySelector<HTMLInputElement>('#brush-drip')!.addEventListener('input
   painter.setTool(tool);
   document.querySelector<HTMLOutputElement>('#drip-value')!.value = `${value}%`;
   (event.target as HTMLInputElement).setAttribute('aria-valuetext', `${value} percent`);
+});
+const sprayAudioButton = document.querySelector<HTMLButtonElement>('#spray-audio')!;
+sprayAudioButton.addEventListener('click', () => {
+  const enabled = sprayAudioButton.getAttribute('aria-pressed') !== 'true';
+  sprayAudioButton.setAttribute('aria-pressed', String(enabled));
+  sprayAudioButton.querySelector('i')?.classList.toggle('fa-volume-high', enabled);
+  sprayAudioButton.querySelector('i')?.classList.toggle('fa-volume-xmark', !enabled);
+  painter.setSprayAudioEnabled(enabled);
 });
 const storedGallery = loadGallery();
 let entries = (storedGallery.entries ?? []).filter(entry => entry.source !== 'seed');

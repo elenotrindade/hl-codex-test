@@ -41,4 +41,17 @@ describe('spray can audio', () => {
     expect(ramps.at(-1)).toBe(0);
     audio.dispose();
   });
+
+  it('stays silent when sound is turned off', () => {
+    const { ramps, audio } = installAudio();
+    audio.setEnabled(false);
+    audio.start();
+    expect(ramps).toEqual([]);
+    audio.setEnabled(true);
+    audio.start();
+    expect(ramps).toContain(0.14);
+    audio.setEnabled(false);
+    expect(ramps.at(-1)).toBe(0);
+    audio.dispose();
+  });
 });

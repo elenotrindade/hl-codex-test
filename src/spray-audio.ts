@@ -26,10 +26,24 @@ export class SprayCanAudio {
   private gain?: GainNode;
   private source?: AudioBufferSourceNode;
   private wantPlay = false;
+  private enabled = true;
   private startedAt = 0;
   private stopTimer?: number;
 
+  setEnabled(enabled: boolean): void {
+    this.enabled = enabled;
+    if (!enabled) {
+      this.wantPlay = false;
+      if (this.stopTimer !== undefined) {
+        clearTimeout(this.stopTimer);
+        this.stopTimer = undefined;
+      }
+      this.ramp(0, 0.04);
+    }
+  }
+
   start(): void {
+    if (!this.enabled) return;
     const Ctor = audioContextCtor();
     if (!Ctor) return;
     this.wantPlay = true;

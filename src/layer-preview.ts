@@ -15,6 +15,34 @@ function markShape(mark: PaintMark): SVGElement {
     rect.setAttribute('transform', `rotate(${mark.brush.angle} ${mark.x * 100} ${mark.y * 40})`);
     return rect;
   }
+  if (mark.texture === 'text') {
+    const text = document.createElementNS(namespace, 'text');
+    text.setAttribute('x', String(mark.x * 100));
+    text.setAttribute('y', String(mark.y * 40));
+    text.setAttribute('text-anchor', 'middle');
+    text.setAttribute('dominant-baseline', 'middle');
+    text.setAttribute('font-size', String(Math.max(4, size)));
+    text.textContent = (mark.text?.value ?? 'T').slice(0, 12);
+    return text;
+  }
+  if (mark.texture === 'shape' && mark.shape) {
+    const x2 = mark.shape.x2 * 100;
+    const y2 = mark.shape.y2 * 40;
+    if (mark.shape.kind === 'line' || mark.shape.kind === 'arrow') {
+      const line = document.createElementNS(namespace, 'line');
+      line.setAttribute('x1', String(mark.x * 100));
+      line.setAttribute('y1', String(mark.y * 40));
+      line.setAttribute('x2', String(x2));
+      line.setAttribute('y2', String(y2));
+      return line;
+    }
+    const box = document.createElementNS(namespace, 'rect');
+    box.setAttribute('x', String(Math.min(mark.x * 100, x2)));
+    box.setAttribute('y', String(Math.min(mark.y * 40, y2)));
+    box.setAttribute('width', String(Math.max(1, Math.abs(x2 - mark.x * 100))));
+    box.setAttribute('height', String(Math.max(1, Math.abs(y2 - mark.y * 40))));
+    return box;
+  }
   if (mark.texture === 'marker') {
     const rect = document.createElementNS(namespace, 'rect');
     rect.setAttribute('x', String(mark.x * 100 - size));
@@ -47,7 +75,9 @@ export function createLayerPreview(marks: PaintMark[]): SVGSVGElement {
   for (const mark of marks) {
     if (mark.erase) continue;
     const shape = markShape(mark);
-    shape.setAttribute('fill', mark.color);
+    const outline = mark.texture === 'shape' && mark.shape && (mark.shape.kind === 'line' || mark.shape.kind === 'arrow' || !mark.shape.fill);
+    shape.setAttribute('fill', outline ? 'none' : mark.color);
+    if (mark.texture === 'shape') shape.setAttribute('stroke', mark.color);
     shape.setAttribute('opacity', String(mark.opacity ?? 1));
     preview.append(shape);
   }

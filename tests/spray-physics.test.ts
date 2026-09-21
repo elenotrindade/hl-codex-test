@@ -9,7 +9,7 @@ describe('spray physics', () => {
   it('grows a drip with brush size and can reach the canvas floor', () => {
     const point = { x: 0.5, y: 0.2 };
     expect(sprayDripLength(point, [], spray(0.5, 0.2))).toBe(0);
-    const wet = Array.from({ length: 9 }, () => spray(0.5, 0.2, 0.03));
+    const wet = Array.from({ length: 12 }, () => spray(0.5, 0.2, 0.03));
     const thin = sprayDripLength(point, wet, spray(0.5, 0.2, 0.02));
     const fat = sprayDripLength(point, wet, spray(0.5, 0.2, 0.08));
     expect(thin).toBeGreaterThan(0);
@@ -18,6 +18,7 @@ describe('spray physics', () => {
     expect(sprayDripLength(point, clickWet, spray(0.5, 0.2, 0.03))).toBeLessThan(0.12);
     const soaked = Array.from({ length: 80 }, () => spray(0.5, 0.2, 0.06));
     expect(sprayDripLength({ x: 0.5, y: 0.2 }, soaked, spray(0.5, 0.2, 0.06))).toBeCloseTo(0.8);
+    expect(sprayDripLength({ x: 0.5, y: 0.2 }, soaked, { ...spray(0.5, 0.2, 0.06), floor: 0.2 })).toBeCloseTo(0.2);
     expect(sprayDripLength(point, soaked, { ...spray(0.5, 0.2, 0.06), dripAmount: 0 })).toBe(0);
     const light = sprayDripLength(point, wet, { ...spray(0.5, 0.2, 0.08), dripAmount: 0.25 });
     const heavy = sprayDripLength(point, wet, { ...spray(0.5, 0.2, 0.08), dripAmount: 1 });

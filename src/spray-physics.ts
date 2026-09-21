@@ -8,9 +8,9 @@ type WetMark = Point & { color: string; texture: string; size: number; opacity?:
 
 export const SPRAY_CLICK_BURST = 12;
 const WET_RADIUS = 1.7;
-const DRIP_START = 7;
+const DRIP_START = 10.5;
 
-export function sprayDripLength(point: Point, wetMarks: readonly WetMark[], mark: Pick<WetMark, 'color' | 'size' | 'opacity'> & { dripAmount?: number }): number {
+export function sprayDripLength(point: Point, wetMarks: readonly WetMark[], mark: Pick<WetMark, 'color' | 'size' | 'opacity'> & { dripAmount?: number; floor?: number }): number {
   const amount = clamp(mark.dripAmount ?? 1, 0, 1);
   if (amount <= 0) return 0;
   let load = 0;
@@ -22,7 +22,7 @@ export function sprayDripLength(point: Point, wetMarks: readonly WetMark[], mark
     load += 1 - distance / reach;
   }
   if (load < DRIP_START) return 0;
-  const floor = Math.max(0, 1 - point.y);
+  const floor = Math.max(0, mark.floor ?? 1 - point.y);
   const excess = load - DRIP_START;
   const rate = 0.028 + mark.size * 0.22;
   const grow = Math.pow(excess, 0.75) * rate * (mark.opacity ?? 1) * amount;

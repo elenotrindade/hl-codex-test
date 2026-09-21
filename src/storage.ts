@@ -1,5 +1,6 @@
 import { TEXTURES, type PaintMark } from './train-painter';
 import { isCustomBrush } from './custom-brush';
+import { isShapeStamp, isTextStamp } from './editor-tools';
 import { clamp, paintColorHex } from './color-tools';
 import { getScenario, isInsidePaintableArea, type PaintScenario } from './scenarios';
 import { isGallery, type GalleryEntry } from './gallery';
@@ -22,7 +23,11 @@ export function isMark(value: unknown, scenario: PaintScenario): value is PaintM
     (mark.opacity === undefined || Number.isFinite(mark.opacity) && mark.opacity >= 0.05 && mark.opacity <= 1) &&
     (mark.erase === undefined || mark.erase === true) &&
     (mark.brush === undefined || isCustomBrush(mark.brush)) &&
-    (mark.drip === undefined || Number.isFinite(mark.drip) && mark.drip >= 0 && mark.drip <= 1);
+    (mark.drip === undefined || Number.isFinite(mark.drip) && mark.drip >= 0 && mark.drip <= 1) &&
+    (mark.texture === 'shape'
+      ? isShapeStamp(mark.shape) && isInsidePaintableArea(scenario, { x: mark.shape.x2, y: mark.shape.y2 })
+      : mark.shape === undefined) &&
+    (mark.texture === 'text' ? isTextStamp(mark.text) : mark.text === undefined);
 }
 
 function isSnapshot(value: unknown, scenario: PaintScenario): value is ArtworkSnapshot {
@@ -78,6 +83,8 @@ function persistableMark(mark: PaintMark): PaintMark {
   const next: PaintMark = { ...mark, color: paintColorHex(mark.color) };
   if (Number.isFinite(mark.size)) next.size = clamp(mark.size, 0.003, 0.12);
   if (mark.brush) next.brush = { ...mark.brush };
+  if (mark.shape) next.shape = { ...mark.shape };
+  if (mark.text) next.text = { ...mark.text };
   return next;
 }
 
