@@ -53,6 +53,22 @@ export function selectLayer(snapshot: ArtworkSnapshot, layerId: string): Artwork
   return snapshot.layers.some(layer => layer.id === layerId) ? { ...snapshot, activeLayerId: layerId } : snapshot;
 }
 
+export function toggleLayerVisibility(snapshot: ArtworkSnapshot, layerId: string, updatedAt = new Date().toISOString()): ArtworkSnapshot {
+  if (!snapshot.layers.some(layer => layer.id === layerId)) return snapshot;
+  return {
+    ...snapshot,
+    updatedAt,
+    layers: snapshot.layers.map(layer => layer.id === layerId ? { ...layer, visible: !layer.visible, marks: copyMarks(layer.marks) } : { ...layer, marks: copyMarks(layer.marks) }),
+  };
+}
+
+export function deleteLayer(snapshot: ArtworkSnapshot, layerId: string, updatedAt = new Date().toISOString()): ArtworkSnapshot {
+  if (snapshot.layers.length <= 1 || !snapshot.layers.some(layer => layer.id === layerId)) return snapshot;
+  const remaining = snapshot.layers.filter(layer => layer.id !== layerId).map(layer => ({ ...layer, marks: copyMarks(layer.marks) }));
+  const activeLayerId = snapshot.activeLayerId === layerId ? remaining[0].id : snapshot.activeLayerId;
+  return { ...snapshot, activeLayerId, layers: remaining, updatedAt };
+}
+
 export function getActiveLayer(snapshot: ArtworkSnapshot): PaintLayer {
   return snapshot.layers.find(layer => layer.id === snapshot.activeLayerId) ?? snapshot.layers[0];
 }

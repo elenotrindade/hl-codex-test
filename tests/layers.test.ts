@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { addLayer, appendMarksToLayer, createDefaultLayer, createSnapshot, getRenderableLayers, getRenderableMarks, selectLayer } from '../src/layers';
+import { addLayer, appendMarksToLayer, createDefaultLayer, createSnapshot, deleteLayer, getRenderableLayers, getRenderableMarks, selectLayer, toggleLayerVisibility } from '../src/layers';
 import { getScenario } from '../src/scenarios';
 import { type PaintMark } from '../src/train-painter';
 
@@ -41,5 +41,29 @@ describe('layers', () => {
     ];
     expect(getRenderableLayers(layers).map(layer => layer.id)).toEqual(['bottom', 'top']);
     expect(getRenderableMarks(layers).map(item => item.x)).toEqual([0.2, 0.8]);
+  });
+
+  it('toggles visibility without changing active selection', () => {
+    const bottom = createDefaultLayer([mark(0.3)], 1000);
+    const top = { ...createDefaultLayer([mark(0.7)], 2000), id: 'top', name: 'Layer 2' };
+    const snapshot = createSnapshot(getScenario('train'), [top, bottom], 'top');
+    const hidden = toggleLayerVisibility(snapshot, 'top', '2026-09-17T12:02:00.000Z');
+    expect(hidden.activeLayerId).toBe('top');
+    expect(hidden.layers[0].visible).toBe(false);
+    expect(getRenderableMarks(hidden.layers)).toEqual([mark(0.3)]);
+    expect(toggleLayerVisibility(hidden, 'missing')).toBe(hidden);
+  });
+
+  it('deletes layers and falls back when the active layer is removed', () => {
+    const bottom = createDefaultLayer([mark(0.3)], 1000);
+    const middle = { ...createDefaultLayer([mark(0.5)], 1500), id: 'middle', name: 'Layer 2' };
+    const top = { ...createDefaultLayer([mark(0.7)], 2000), id: 'top', name: 'Layer 3' };
+    const snapshot = createSnapshot(getScenario('train'), [top, middle, bottom], 'top');
+    const withoutActive = deleteLayer(snapshot, 'top', '2026-09-17T12:03:00.000Z');
+    expect(withoutActive.layers.map(layer => layer.id)).toEqual(['middle', 'layer-1']);
+    expect(withoutActive.activeLayerId).toBe('middle');
+    const withoutInactive = deleteLayer(withoutActive, 'layer-1');
+    expect(withoutInactive.activeLayerId).toBe('middle');
+    expect(deleteLayer(withoutInactive, 'middle')).toBe(withoutInactive);
   });
 });

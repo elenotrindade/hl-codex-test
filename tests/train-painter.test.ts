@@ -150,6 +150,29 @@ describe('scenario-driven painting', () => {
     painter.destroy();
   });
 
+  it('skips hidden layers during replay and snapshot overlay capture', async () => {
+    const { painter, context, canvas } = setup();
+    const visibleMark = createPaintMark({ x: 0.4, y: 0.5 }, { ...tool, color: '#111111' });
+    const hiddenMark = createPaintMark({ x: 0.6, y: 0.5 }, { ...tool, color: '#222222' });
+    const visible = createDefaultLayer([visibleMark], 1000);
+    const hidden = { ...createDefaultLayer([hiddenMark], 2000), id: 'hidden', name: 'Layer 2', visible: false };
+    context.arc.mockClear();
+    painter.setArtwork(getScenario('train'), createSnapshot(getScenario('train'), [hidden, visible], visible.id));
+    expect(context.arc.mock.calls.map(call => call[0])).toEqual([400]);
+    const overlayContext = { drawImage: vi.fn() };
+    const outputContext = { drawImage: vi.fn(), fillRect: vi.fn(), fillStyle: '' };
+    const overlay = { getContext: () => overlayContext, width: 0, height: 0 };
+    const output = { getContext: () => outputContext, toDataURL: vi.fn(() => 'data:image/png;base64,Yw=='), width: 0, height: 0 };
+    vi.stubGlobal('document', { createElement: vi.fn().mockReturnValueOnce(overlay).mockReturnValueOnce(output) });
+    let image: { onload: () => void; src: string };
+    vi.stubGlobal('Image', class { constructor() { image = this as unknown as typeof image; } });
+    const result = painter.createSnapshot();
+    expect(overlayContext.drawImage).toHaveBeenCalledWith(canvas, 0, 0, 1000, 400);
+    image!.onload();
+    await expect(result).resolves.toBe('data:image/png;base64,Yw==');
+    painter.destroy();
+  });
+
   it('keeps higher layers above new marks painted into a lower active layer', () => {
     const { painter, context, send } = setup();
     const bottomMark = createPaintMark({ x: 0.3, y: 0.5 }, { ...tool, color: '#111111' });

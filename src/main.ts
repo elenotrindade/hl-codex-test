@@ -6,7 +6,8 @@ import { seededGallery, publishArtwork, upvote, rankGallery, getRecentGallery, t
 import { getScenario, scenarios, type PaintScenario } from './scenarios';
 import { openDialog } from './dialogs';
 import { exportTrainImage, type ExportAction, type ExportOutcome } from './artwork-export';
-import { addLayer, createDefaultLayer, createSnapshot, replaceLayerMarks, selectLayer, type ArtworkSnapshot } from './layers';
+import { createLayerPreview } from './layer-preview';
+import { addLayer, createDefaultLayer, createSnapshot, deleteLayer, replaceLayerMarks, selectLayer, toggleLayerVisibility, type ArtworkSnapshot } from './layers';
 
 const tool: ToolState = { color: DEFAULT_COLOR, texture: 'solid', brushSize: 0.025, opacity: 0.9, weight: 1 };
 let activeScenario: PaintScenario = getScenario('train');
@@ -128,17 +129,53 @@ function renderLayers(): void {
     const item = document.createElement('li');
     item.className = 'layer-row';
     item.dataset.active = String(layer.id === artwork.activeLayerId);
+    item.dataset.visible = String(layer.visible);
     const button = document.createElement('button');
     button.type = 'button';
-    button.textContent = `${layer.name} (${layer.marks.length})`;
+    button.className = 'layer-select';
     button.setAttribute('aria-pressed', String(layer.id === artwork.activeLayerId));
+    button.setAttribute('aria-label', `Select ${layer.name}, ${layer.marks.length} marks${layer.visible ? '' : ', hidden'}`);
+    const preview = createLayerPreview(layer.marks);
+    const label = document.createElement('span');
+    label.className = 'layer-select__label';
+    label.textContent = layer.name;
+    const count = document.createElement('span');
+    count.className = 'layer-select__meta';
+    count.textContent = `${layer.marks.length} mark${layer.marks.length === 1 ? '' : 's'}`;
+    button.append(preview, label, count);
     button.addEventListener('click', () => {
       artwork = selectLayer(artwork, layer.id);
       painter.setArtwork(activeScenario, artwork);
       renderLayers();
       persistArtwork(success => success ? `${layer.name} selected.` : `${layer.name} selected, but the choice could not be saved.`);
     });
-    item.append(button);
+    const visibility = document.createElement('button');
+    visibility.type = 'button';
+    visibility.className = 'icon-button';
+    visibility.textContent = layer.visible ? 'Hide' : 'Show';
+    visibility.setAttribute('aria-label', `${layer.visible ? 'Hide' : 'Show'} ${layer.name}`);
+    visibility.setAttribute('aria-pressed', String(!layer.visible));
+    visibility.addEventListener('click', () => {
+      artwork = toggleLayerVisibility(artwork, layer.id);
+      painter.setArtwork(activeScenario, artwork);
+      renderLayers();
+      persistArtwork(success => success ? `${layer.name} ${layer.visible ? 'hidden' : 'shown'}.` : `${layer.name} visibility changed, but it could not be saved.`);
+    });
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.className = 'icon-button icon-button--danger';
+    remove.textContent = 'Del';
+    remove.disabled = artwork.layers.length <= 1;
+    remove.setAttribute('aria-label', `Delete ${layer.name}`);
+    remove.addEventListener('click', () => {
+      const wasActive = artwork.activeLayerId === layer.id;
+      artwork = deleteLayer(artwork, layer.id);
+      painter.setArtwork(activeScenario, artwork);
+      renderLayers();
+      const activeLayer = artwork.layers.find(item => item.id === artwork.activeLayerId)?.name ?? 'another layer';
+      persistArtwork(success => success ? `${layer.name} deleted.${wasActive ? ` ${activeLayer} is now active.` : ''}` : `${layer.name} deleted, but the change could not be saved.`);
+    });
+    item.append(button, visibility, remove);
     return item;
   }));
 }
