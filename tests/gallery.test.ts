@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { getRecentGallery, isGallery, publishArtwork, rankGallery, seededGallery, upvote } from '../src/gallery';
+import { getRecentGallery, isGallery, paginateGallery, publishArtwork, rankGallery, seededGallery, upvote } from '../src/gallery';
 import { ARTWORK_KEY, GALLERY_KEY, loadGallery, saveGallery } from '../src/storage';
 
 const image = 'data:image/png;base64,aGVsbG8=';
@@ -57,6 +57,23 @@ describe('mock gallery', () => {
     expect(rankGallery(tied.reverse())[0].id).toBe('seed-1');
     const capped = entries.map(entry => ({ ...entry, votes: Number.MAX_SAFE_INTEGER }));
     expect(upvote(capped, 'seed-1')[0].votes).toBe(Number.MAX_SAFE_INTEGER);
+  });
+  it('paginates ranked entries into clamped slices', () => {
+    const entries = [
+      ...seededGallery(),
+      { id: 'local-1', title: 'One', imageDataUrl: image, createdAt: date, votes: 7, source: 'local' as const },
+      { id: 'local-2', title: 'Two', imageDataUrl: image, createdAt: date, votes: 3, source: 'local' as const },
+      { id: 'local-3', title: 'Three', imageDataUrl: image, createdAt: date, votes: 1, source: 'local' as const },
+    ];
+    const ranked = rankGallery(entries);
+    expect(paginateGallery(ranked, 0, 3)).toMatchObject({
+      items: ranked.slice(0, 3),
+      page: 0,
+      totalPages: 2,
+    });
+    expect(paginateGallery(ranked, 1, 3)).toMatchObject({ items: ranked.slice(3, 5), page: 1, totalPages: 2 });
+    expect(paginateGallery(ranked, 9, 3).page).toBe(1);
+    expect(paginateGallery(ranked, -2, 3).page).toBe(0);
   });
   it('persists submissions and seed/local votes separately from the draft', () => {
     const storage = memory();

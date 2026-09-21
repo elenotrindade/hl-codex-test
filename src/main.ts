@@ -2,13 +2,15 @@ import './styles.css';
 import { TrainPainter, TEXTURES, type TextureId, type ToolState } from './train-painter';
 import { loadArtwork, saveArtwork, loadGallery, saveGallery } from './storage';
 import { DEFAULT_COLOR, colorFromWheelPoint, moveWheelSelection, type WheelMoveDirection, type WheelSelection } from './paint-tools';
-import { seededGallery, publishArtwork, upvote, rankGallery, getRecentGallery, type GalleryEntry } from './gallery';
+import { seededGallery, publishArtwork, upvote, rankGallery, getRecentGallery, paginateGallery, type GalleryEntry } from './gallery';
 import { getScenario, scenarios, type PaintScenario } from './scenarios';
 import { openDialog } from './dialogs';
 import { exportTrainImage, type ExportAction, type ExportOutcome } from './artwork-export';
 
 const tool: ToolState = { color: DEFAULT_COLOR, texture: 'solid', brushSize: 0.025, opacity: 0.9, weight: 1 };
 const displayFeedLimit = 2;
+const rankingPageSize = 3;
+let rankingPage = 0;
 let activeScenario: PaintScenario = getScenario('train');
 document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   <a class="skip-link" href="#workshop">Skip to the workshop</a>
@@ -80,6 +82,11 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
       <h2 id="ranking-heading" class="ranking-heading">Yard ranking / Most upvoted</h2>
       <p>Demo voting: vote as often as you like. Ties use entry ID order.</p>
       <ol id="gallery-ranking"></ol>
+      <nav class="ranking-pagination" aria-label="Yard ranking pages">
+        <button type="button" id="ranking-prev">Previous</button>
+        <span id="ranking-page-status" role="status" aria-live="polite">Page 1 of 1</span>
+        <button type="button" id="ranking-next">Next</button>
+      </nav>
     </section>
     <dialog id="share-dialog" aria-labelledby="share-dialog-title"></dialog>
     <dialog id="artwork-dialog" aria-labelledby="artwork-dialog-title"></dialog>
@@ -233,6 +240,9 @@ const exportStatus = document.querySelector<HTMLParagraphElement>('#export-statu
 const feedSummary = document.querySelector<HTMLParagraphElement>('#gallery-feed-summary')!;
 const feed = document.querySelector<HTMLDivElement>('#gallery-feed')!;
 const ranking = document.querySelector<HTMLOListElement>('#gallery-ranking')!;
+const rankingPrev = document.querySelector<HTMLButtonElement>('#ranking-prev')!;
+const rankingNext = document.querySelector<HTMLButtonElement>('#ranking-next')!;
+const rankingPageStatus = document.querySelector<HTMLSpanElement>('#ranking-page-status')!;
 galleryStatus.textContent = {
   loaded: 'Local display and votes restored.', missing: 'Built-in examples are ready. Add your train.',
   invalid: 'Saved display could not be read. Showing built-in examples.',
@@ -263,18 +273,22 @@ function renderGallery(): void {
     source.textContent = entry.source === 'seed' ? 'Built-in example / mock public' : 'Your submission / this browser only';
     const vote = document.createElement('button');
     vote.type = 'button';
+    vote.dataset.vote = entry.id;
     vote.textContent = `Upvote (${entry.votes})`;
     vote.setAttribute('aria-label', `Upvote ${entry.title}, ${entry.votes} votes`);
     vote.addEventListener('click', () => {
       entries = upvote(entries, entry.id);
       persistGallery(`Upvoted ${entry.title}.`);
       renderGallery();
-      document.querySelector<HTMLButtonElement>(`[data-vote="${entry.id}"]`)?.focus();
+      document.querySelector<HTMLButtonElement>(`#gallery-ranking [data-vote="${entry.id}"]`)?.focus()
+        ?? document.querySelector<HTMLButtonElement>(`#gallery-feed [data-vote="${entry.id}"]`)?.focus();
     });
     card.append(image, title, source, vote);
     return card;
   }));
-  ranking.replaceChildren(...rankGallery(entries).map(entry => {
+  const rankedPage = paginateGallery(rankGallery(entries), rankingPage, rankingPageSize);
+  rankingPage = rankedPage.page;
+  ranking.replaceChildren(...rankedPage.items.map(entry => {
     const item = document.createElement('li');
     item.className = 'ranking-card';
     const image = document.createElement('img');
@@ -300,12 +314,25 @@ function renderGallery(): void {
       entries = upvote(entries, entry.id);
       persistGallery(`Upvoted ${entry.title}.`);
       renderGallery();
-      document.querySelector<HTMLButtonElement>(`[data-vote="${entry.id}"]`)?.focus();
+      document.querySelector<HTMLButtonElement>(`#gallery-ranking [data-vote="${entry.id}"]`)?.focus()
+        ?? document.querySelector<HTMLButtonElement>(`#gallery-feed [data-vote="${entry.id}"]`)?.focus();
     });
     item.append(image, title, votes, zoom, vote);
     return item;
   }));
+  rankingPrev.disabled = rankingPage === 0;
+  rankingNext.disabled = rankingPage >= rankedPage.totalPages - 1;
+  rankingPageStatus.textContent = `Page ${rankingPage + 1} of ${rankedPage.totalPages}`;
 }
+
+rankingPrev.addEventListener('click', () => {
+  rankingPage = Math.max(0, rankingPage - 1);
+  renderGallery();
+});
+rankingNext.addEventListener('click', () => {
+  rankingPage += 1;
+  renderGallery();
+});
 
 function escapeHtml(value: string): string {
   return value.replace(/[&<>"]/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[character]!);
