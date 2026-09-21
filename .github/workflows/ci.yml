@@ -2,9 +2,9 @@ name: CI
 
 on:
   pull_request:
-    branches: [train-graffiti-painting-interactive-page-igmfrg]
+    branches: [master]
   push:
-    branches: [train-graffiti-painting-interactive-page-igmfrg]
+    branches: [master]
 
 jobs:
   test:
