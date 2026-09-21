@@ -15,7 +15,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
     <div class="yard-strip">YARD / OPEN CANVAS / NO. 001</div>
     <header>
       <h1>Leave your <em>mark.</em></h1>
-      <p>One train. Your colors. Dial in a fresh paint mix, then drag across the blue body panels.</p>
+      <p>Pick a real street surface. Dial in a fresh paint mix, then drag directly over the photo-lit panel.</p>
     </header>
     <section id="workshop" class="workshop" aria-label="Street painting workshop" tabindex="-1">
       <div class="stage-panel">
@@ -65,7 +65,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
       <button type="button" id="publish-artwork">Put on display</button>
       <p id="gallery-status" role="status" aria-live="polite"></p>
       <div class="export-actions" aria-labelledby="export-heading">
-        <h3 id="export-heading">Save or share your current train</h3>
+        <h3 id="export-heading">Save or share your current scene</h3>
         <p>Download a PNG, or use your browser's share sheet where file sharing is supported.</p>
         <button type="button" id="download-artwork">Download PNG</button>
         <button type="button" id="share-artwork">Share image</button>
@@ -323,7 +323,7 @@ function exportMessage(outcome: ExportOutcome): string {
   if (outcome.status === 'shared') return `${outcome.filename} handed to your browser's share sheet. YARD cannot confirm it was posted.`;
   if (outcome.status === 'cancelled') return `Share cancelled. ${outcome.filename} was not posted by YARD.`;
   if (outcome.status === 'unsupported') return `This browser cannot share image files from YARD. Use Download PNG instead.`;
-  return `Could not export the train snapshot: ${outcome.message}`;
+  return `Could not export the scene snapshot: ${outcome.message}`;
 }
 
 async function exportCurrentTrain(action: ExportAction): Promise<void> {
@@ -332,14 +332,14 @@ async function exportCurrentTrain(action: ExportAction): Promise<void> {
   download.setAttribute('aria-busy', 'true');
   share.setAttribute('aria-busy', 'true');
   exportStatus.dataset.error = 'false';
-  exportStatus.textContent = 'Preparing your train snapshot...';
+  exportStatus.textContent = `Preparing your ${activeScenario.label.toLowerCase()} snapshot...`;
   try {
     const image = await painter.createSnapshot();
     const outcome = await exportTrainImage(image, action);
     exportStatus.textContent = exportMessage(outcome);
     exportStatus.dataset.error = String(outcome.status === 'failed');
   } catch {
-    exportStatus.textContent = 'Could not create the train snapshot. Nothing was downloaded or shared; please try again.';
+    exportStatus.textContent = `Could not create the ${activeScenario.label.toLowerCase()} snapshot. Nothing was downloaded or shared; please try again.`;
     exportStatus.dataset.error = 'true';
   } finally {
     download.disabled = false;

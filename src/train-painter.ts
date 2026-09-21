@@ -10,6 +10,23 @@ export type CursorPreviewState = { visible: boolean; x: number; y: number; size:
 export type HistoryState = { canUndo: boolean; canRedo: boolean };
 type PaintStroke = PaintMark[];
 
+function applyPhotoLighting(context: CanvasRenderingContext2D, width: number, height: number): void {
+  if (typeof context.createLinearGradient !== 'function' || typeof context.createRadialGradient !== 'function') return;
+  const sun = context.createLinearGradient(0, 0, width, height * 0.9);
+  sun.addColorStop(0, 'rgb(255 255 255 / 0.2)');
+  sun.addColorStop(0.42, 'rgb(255 255 255 / 0.04)');
+  sun.addColorStop(1, 'rgb(0 0 0 / 0.16)');
+  context.fillStyle = sun;
+  context.fillRect(0, 0, width, height);
+
+  const contact = context.createRadialGradient(width * 0.52, height * 0.63, 0, width * 0.52, height * 0.63, width * 0.55);
+  contact.addColorStop(0, 'rgb(255 255 255 / 0.08)');
+  contact.addColorStop(0.7, 'rgb(0 0 0 / 0)');
+  contact.addColorStop(1, 'rgb(0 0 0 / 0.18)');
+  context.fillStyle = contact;
+  context.fillRect(0, 0, width, height);
+}
+
 export function createPaintMark(point: Point, tool: ToolState, pressure = 0): PaintMark {
   const weight = tool.weight ?? 1;
   const pressureScale = pressure > 0 ? 0.65 + pressure * weight : weight;
@@ -139,8 +156,7 @@ export class TrainPainter {
     await new Promise<void>((resolve, reject) => {
       base.onload = () => resolve();
       base.onerror = () => reject(new Error(`${this.scenario.label} image could not load`));
-      base.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(this.scenario.template().replace('<svg ',
-        `<svg width="${this.scenario.width}" height="${this.scenario.height}" `))}`;
+      base.src = this.scenario.imageSrc;
     });
     const snapshot = document.createElement('canvas');
     snapshot.width = this.scenario.width;
@@ -151,6 +167,7 @@ export class TrainPainter {
     context.fillRect(0, 0, this.scenario.width, this.scenario.height);
     context.drawImage(base, 0, 0, this.scenario.width, this.scenario.height);
     context.drawImage(overlay, 0, 0);
+    applyPhotoLighting(context, this.scenario.width, this.scenario.height);
     return snapshot.toDataURL('image/png');
   }
 

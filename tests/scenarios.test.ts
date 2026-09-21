@@ -7,9 +7,10 @@ describe('paint scenarios', () => {
     for (const scenario of scenarios) {
       expect(scenario.width).toBe(1000);
       expect(scenario.height).toBe(400);
+      expect(scenario.imageSrc).toMatch(/^\/references\/.+\.png$/);
       expect(scenario.snapshotBackground).toMatch(/^#[0-9a-f]{6}$/i);
-      expect(scenario.template()).toContain('viewBox="0 0 1000 400"');
-      expect(scenario.template()).toContain('role="img"');
+      expect(scenario.template()).toContain('class="scene-photo"');
+      expect(scenario.template()).toContain('class="scene-lighting"');
       expect(scenario.paintableRegions.length).toBeGreaterThan(0);
     }
   });
