@@ -1,5 +1,6 @@
 import { getScenario, isInsidePaintableArea, type PaintScenario } from './scenarios';
 import { type Point } from './train-template';
+import { cloneArtworkDocument, createDefaultArtworkDocument, createLayer as addDocumentLayer, deleteLayer as deleteDocumentLayer, duplicateLayer as duplicateDocumentLayer, flattenVisibleMarks, getActiveLayer, moveLayer as moveDocumentLayer, renameLayer as renameDocumentLayer, selectLayer, setLayerLocked as setDocumentLayerLocked, setLayerVisible as setDocumentLayerVisible, touchDocument, type ArtworkDocument } from './artwork-document';
 
 export const TEXTURES = ['solid', 'spray', 'marker'] as const;
 export type TextureId = typeof TEXTURES[number];
@@ -8,7 +9,7 @@ export type ToolState = { color: string; texture: TextureId; brushSize: number; 
 export type PaintMark = Point & { color: string; texture: TextureId; size: number; opacity: number };
 export type CursorPreviewState = { visible: boolean; x: number; y: number; size: number; color: string; opacity: number };
 export type HistoryState = { canUndo: boolean; canRedo: boolean };
-type PaintStroke = PaintMark[];
+type LayerPaintStroke = { layerId: string; marks: PaintMark[] };
 
 function applyPhotoLighting(context: CanvasRenderingContext2D, width: number, height: number): void {
   if (typeof context.createLinearGradient !== 'function' || typeof context.createRadialGradient !== 'function') return;
@@ -35,18 +36,19 @@ export function createPaintMark(point: Point, tool: ToolState, pressure = 0): Pa
 
 export class TrainPainter {
   private readonly context: CanvasRenderingContext2D;
-  private readonly marks: PaintMark[] = [];
-  private currentStroke: PaintStroke = [];
-  private undoStack: PaintStroke[] = [];
-  private redoStack: PaintStroke[] = [];
+  private document: ArtworkDocument;
+  private currentStroke: LayerPaintStroke = { layerId: '', marks: [] };
+  private undoStack: LayerPaintStroke[] = [];
+  private redoStack: LayerPaintStroke[] = [];
   private activePointer: number | null = null;
   private previous: Point | null = null;
   private tool: ToolState;
+  private readonly emitLegacyMarks: boolean;
   private resizeObserver?: ResizeObserver;
   private resolutionQuery?: MediaQueryList;
 
   constructor(private readonly canvas: HTMLCanvasElement, tool: ToolState,
-    private readonly onChange: (marks: PaintMark[]) => void = () => {}, initialMarks: PaintMark[] = [],
+    private readonly onChange: (document: ArtworkDocument | PaintMark[]) => void = () => {}, initialDocument: ArtworkDocument | PaintMark[] = createDefaultArtworkDocument(),
     private scenario: PaintScenario = getScenario('train'),
     private readonly onCursorChange: (state: CursorPreviewState) => void = () => {},
     private readonly onHistoryChange: (state: HistoryState) => void = () => {}) {
@@ -54,8 +56,13 @@ export class TrainPainter {
     if (!context) throw new Error('Canvas painting is unavailable in this browser.');
     this.context = context;
     this.tool = { ...tool };
-    this.marks.push(...initialMarks.map(mark => ({ ...mark })));
-    this.undoStack = initialMarks.length ? [initialMarks.map(mark => ({ ...mark }))] : [];
+    this.emitLegacyMarks = Array.isArray(initialDocument);
+    this.document = Array.isArray(initialDocument)
+      ? createDefaultArtworkDocument()
+      : cloneArtworkDocument(initialDocument);
+    if (Array.isArray(initialDocument)) this.document.layers[0].marks = initialDocument.map(mark => ({ ...mark }));
+    const activeLayer = getActiveLayer(this.document);
+    this.undoStack = activeLayer && activeLayer.marks.length ? [{ layerId: activeLayer.id, marks: activeLayer.marks.map(mark => ({ ...mark })) }] : [];
     this.resize();
     if (typeof ResizeObserver !== 'undefined') {
       this.resizeObserver = new ResizeObserver(this.handleResize);
@@ -76,19 +83,75 @@ export class TrainPainter {
 
   setTool(tool: ToolState): void { this.tool = { ...tool }; }
 
-  setScenario(scenario: PaintScenario, marks: PaintMark[] = []): void {
+  setScenario(scenario: PaintScenario, document: ArtworkDocument | PaintMark[] = createDefaultArtworkDocument()): void {
     this.cancel();
     this.scenario = scenario;
-    this.marks.length = 0;
-    this.marks.push(...marks.map(mark => ({ ...mark })));
-    this.currentStroke = [];
-    this.undoStack = marks.length ? [marks.map(mark => ({ ...mark }))] : [];
+    this.document = Array.isArray(document) ? createDefaultArtworkDocument() : cloneArtworkDocument(document);
+    if (Array.isArray(document)) this.document.layers[0].marks = document.map(mark => ({ ...mark }));
+    this.currentStroke = { layerId: '', marks: [] };
+    const activeLayer = getActiveLayer(this.document);
+    this.undoStack = activeLayer && activeLayer.marks.length ? [{ layerId: activeLayer.id, marks: activeLayer.marks.map(mark => ({ ...mark })) }] : [];
     this.redoStack = [];
+    this.context.clearRect(0, 0, this.scenario.width, this.scenario.height);
     this.resize(true);
     this.notifyHistoryChange();
   }
 
-  getMarks(): PaintMark[] { return this.marks.map(mark => ({ ...mark })); }
+  getMarks(): PaintMark[] { return flattenVisibleMarks(this.document); }
+
+  getDocument(): ArtworkDocument { return cloneArtworkDocument(this.document); }
+
+  setActiveLayer(layerId: string): void {
+    this.cancel();
+    if (!selectLayer(this.document, layerId)) return;
+    this.emitChange(false);
+  }
+
+  createLayer(name?: string): void {
+    this.cancel();
+    addDocumentLayer(this.document, name);
+    this.emitChange(false);
+  }
+
+  renameLayer(layerId: string, name: string): void {
+    this.cancel();
+    if (!renameDocumentLayer(this.document, layerId, name)) return;
+    this.emitChange(false);
+  }
+
+  setLayerLocked(layerId: string, locked: boolean): void {
+    this.cancel();
+    if (!setDocumentLayerLocked(this.document, layerId, locked)) return;
+    this.emitChange(false);
+  }
+
+  setLayerVisible(layerId: string, visible: boolean): void {
+    this.cancel();
+    if (!setDocumentLayerVisible(this.document, layerId, visible)) return;
+    this.resize(true);
+    this.emitChange(false);
+  }
+
+  duplicateLayer(layerId: string): void {
+    this.cancel();
+    if (!duplicateDocumentLayer(this.document, layerId)) return;
+    this.resize(true);
+    this.emitChange(false);
+  }
+
+  moveLayer(layerId: string, direction: 'up' | 'down'): void {
+    this.cancel();
+    if (!moveDocumentLayer(this.document, layerId, direction)) return;
+    this.resize(true);
+    this.emitChange(false);
+  }
+
+  deleteLayer(layerId: string): void {
+    this.cancel();
+    if (!deleteDocumentLayer(this.document, layerId)) return;
+    this.resize(true);
+    this.emitChange(false);
+  }
 
   canUndo(): boolean { return this.undoStack.length > 0; }
 
@@ -98,7 +161,7 @@ export class TrainPainter {
     this.cancel();
     const stroke = this.undoStack.pop();
     if (!stroke) return;
-    this.redoStack.push(stroke.map(mark => ({ ...mark })));
+    this.redoStack.push({ layerId: stroke.layerId, marks: stroke.marks.map(mark => ({ ...mark })) });
     this.replayFromHistory();
     this.emitChange();
   }
@@ -107,7 +170,7 @@ export class TrainPainter {
     this.cancel();
     const stroke = this.redoStack.pop();
     if (!stroke) return;
-    this.undoStack.push(stroke.map(mark => ({ ...mark })));
+    this.undoStack.push({ layerId: stroke.layerId, marks: stroke.marks.map(mark => ({ ...mark })) });
     this.replayFromHistory();
     this.emitChange();
   }
@@ -141,7 +204,7 @@ export class TrainPainter {
     }
     this.context.clip();
     this.previous = null;
-    for (const mark of this.marks) this.render(mark);
+    this.replayMarks(this.context);
   };
 
   async createSnapshot(): Promise<string> {
@@ -150,8 +213,8 @@ export class TrainPainter {
     overlay.height = this.scenario.height;
     const overlayContext = overlay.getContext('2d');
     if (!overlayContext) throw new Error('Snapshot canvas unavailable');
-    // Freeze the paint before loading the SVG so later strokes cannot alter this submission.
-    overlayContext.drawImage(this.canvas, 0, 0, this.scenario.width, this.scenario.height);
+    // Freeze the current visible document state before loading the SVG.
+    this.replayMarks(overlayContext);
     const base = new Image();
     await new Promise<void>((resolve, reject) => {
       base.onload = () => resolve();
@@ -172,12 +235,14 @@ export class TrainPainter {
   }
 
   clear(): void {
-    this.marks.length = 0;
+    const activeLayer = getActiveLayer(this.document);
+    if (activeLayer) activeLayer.marks = [];
     this.cancel(false);
-    this.currentStroke = [];
+    this.currentStroke = { layerId: '', marks: [] };
     this.undoStack = [];
     this.redoStack = [];
     this.context.clearRect(0, 0, this.scenario.width, this.scenario.height);
+    this.resize(true);
     this.emitChange();
   }
 
@@ -193,7 +258,7 @@ export class TrainPainter {
     this.canvas.setPointerCapture(event.pointerId);
     this.activePointer = event.pointerId;
     this.previous = point;
-    this.currentStroke = [];
+    this.currentStroke = { layerId: '', marks: [] };
     this.paint(point, event.pressure);
   };
 
@@ -215,21 +280,28 @@ export class TrainPainter {
 
   private paint(point: Point, pressure = 0): void {
     if (!isInsidePaintableArea(this.scenario, point)) return;
+    const activeLayer = getActiveLayer(this.document);
+    if (!activeLayer || activeLayer.locked) return;
     const mark = createPaintMark(point, this.tool, pressure);
-    this.marks.push(mark);
-    this.currentStroke.push({ ...mark });
+    activeLayer.marks.push(mark);
+    if (!this.currentStroke.layerId) this.currentStroke.layerId = activeLayer.id;
+    this.currentStroke.marks.push({ ...mark });
     this.render(mark);
   }
 
   private replayFromHistory(): void {
-    this.marks.length = 0;
-    this.marks.push(...this.undoStack.flat().map(mark => ({ ...mark })));
+    for (const layer of this.document.layers) layer.marks = [];
+    for (const stroke of this.undoStack) {
+      const layer = this.document.layers.find(item => item.id === stroke.layerId);
+      if (layer) layer.marks.push(...stroke.marks.map(mark => ({ ...mark })));
+    }
     this.resize(true);
   }
 
-  private emitChange(): void {
+  private emitChange(touch = true): void {
     this.notifyHistoryChange();
-    this.onChange(this.getMarks());
+    if (touch) touchDocument(this.document);
+    this.onChange(this.emitLegacyMarks ? this.getMarks() : this.getDocument());
   }
 
   private notifyHistoryChange(): void {
@@ -237,7 +309,14 @@ export class TrainPainter {
   }
 
   private render(mark: PaintMark): void {
-    const ctx = this.context;
+    this.renderTo(this.context, mark);
+  }
+
+  private replayMarks(ctx: CanvasRenderingContext2D): void {
+    for (const mark of flattenVisibleMarks(this.document)) this.renderTo(ctx, mark);
+  }
+
+  private renderTo(ctx: CanvasRenderingContext2D, mark: PaintMark): void {
     const x = mark.x * this.scenario.width;
     const y = mark.y * this.scenario.height;
     const radius = mark.size * this.scenario.width / 2;
@@ -299,7 +378,7 @@ export class TrainPainter {
     } else {
       this.activePointer = null;
       this.previous = null;
-      this.currentStroke = [];
+      this.currentStroke = { layerId: '', marks: [] };
     }
   };
 
@@ -308,10 +387,10 @@ export class TrainPainter {
     this.activePointer = null;
     this.previous = null;
     if (pointer !== null && this.canvas.hasPointerCapture(pointer)) this.canvas.releasePointerCapture(pointer);
-    if (this.currentStroke.length) {
-      this.undoStack.push(this.currentStroke.map(mark => ({ ...mark })));
+    if (this.currentStroke.marks.length) {
+      this.undoStack.push({ layerId: this.currentStroke.layerId, marks: this.currentStroke.marks.map(mark => ({ ...mark })) });
       this.redoStack = [];
-      this.currentStroke = [];
+      this.currentStroke = { layerId: '', marks: [] };
       this.emitChange();
     } else {
       this.notifyHistoryChange();

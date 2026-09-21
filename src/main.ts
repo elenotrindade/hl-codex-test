@@ -1,13 +1,18 @@
 import './styles.css';
 import { TrainPainter, TEXTURES, type TextureId, type ToolState } from './train-painter';
-import { loadArtwork, saveArtwork, loadGallery, saveGallery } from './storage';
+import { loadArtworkDocument, saveArtwork, loadGallery, saveGallery } from './storage';
+import { createDefaultArtworkDocument, getActiveLayer, type ArtworkDocument } from './artwork-document';
 import { DEFAULT_COLOR, colorFromWheelPoint, moveWheelSelection, type WheelMoveDirection, type WheelSelection } from './paint-tools';
-import { seededGallery, publishArtwork, upvote, rankGallery, getRecentGallery, type GalleryEntry } from './gallery';
+import { seededGallery, publishArtwork, upvote, rankGallery, getRecentGallery, paginateGallery, type GalleryEntry } from './gallery';
 import { getScenario, scenarios, type PaintScenario } from './scenarios';
 import { openDialog } from './dialogs';
 import { exportTrainImage, type ExportAction, type ExportOutcome } from './artwork-export';
+import { renderLayerPanel, syncLayerStatus } from './layer-panel';
 
 const tool: ToolState = { color: DEFAULT_COLOR, texture: 'solid', brushSize: 0.025, opacity: 0.9, weight: 1 };
+const displayFeedLimit = 2;
+const rankingPageSize = 3;
+let rankingPage = 0;
 let activeScenario: PaintScenario = getScenario('train');
 document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   <a class="skip-link" href="#workshop">Skip to the workshop</a>
@@ -57,8 +62,14 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
         <p id="clear-help" class="tool-note">Undo and redo work by complete stroke. Clear removes all paint.</p>
         <p id="save-status" role="status" aria-live="polite"></p>
       </aside>
+      <aside class="layers" aria-label="Artwork layers">
+        <h2>03 / Layers</h2>
+        <button id="add-layer" type="button">New layer</button>
+        <div id="layer-list" role="list" aria-label="Layer stack"></div>
+        <p id="layer-status" role="status" aria-live="polite"></p>
+      </aside>
     <section class="display-panel" aria-labelledby="display-heading">
-      <h2 id="display-heading">03 / On display</h2>
+      <h2 id="display-heading">04 / On display</h2>
       <p>A local display rack. Submissions and votes stay in this browser only. Nothing is uploaded.</p>
       <label for="artwork-title">Artwork name <span>optional</span></label>
       <input id="artwork-title" type="text" maxlength="80" placeholder="Midnight layup" autocomplete="off" />
@@ -71,6 +82,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
         <button type="button" id="share-artwork">Share image</button>
         <p id="export-status" role="status" aria-live="polite"></p>
       </div>
+      <p id="gallery-feed-summary" class="gallery-feed-summary"></p>
       <div id="gallery-feed" class="gallery-feed"></div>
     </section>
     </section>
@@ -78,6 +90,11 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
       <h2 id="ranking-heading" class="ranking-heading">Yard ranking / Most upvoted</h2>
       <p>Demo voting: vote as often as you like. Ties use entry ID order.</p>
       <ol id="gallery-ranking"></ol>
+      <nav class="ranking-pagination" aria-label="Yard ranking pages">
+        <button type="button" id="ranking-prev">Previous</button>
+        <span id="ranking-page-status" role="status" aria-live="polite">Page 1 of 1</span>
+        <button type="button" id="ranking-next">Next</button>
+      </nav>
     </section>
     <dialog id="share-dialog" aria-labelledby="share-dialog-title"></dialog>
     <dialog id="artwork-dialog" aria-labelledby="artwork-dialog-title"></dialog>
@@ -88,27 +105,43 @@ const canvas = document.querySelector<HTMLCanvasElement>('canvas')!;
 const cursor = document.querySelector<HTMLDivElement>('.brush-cursor')!;
 const undoButton = document.querySelector<HTMLButtonElement>('#undo-stroke')!;
 const redoButton = document.querySelector<HTMLButtonElement>('#redo-stroke')!;
-const saved = loadArtwork(undefined, activeScenario);
+const saved = loadArtworkDocument(undefined, activeScenario);
 const status = document.querySelector<HTMLParagraphElement>('#save-status')!;
+const layerList = document.querySelector<HTMLDivElement>('#layer-list')!;
+const layerStatus = document.querySelector<HTMLParagraphElement>('#layer-status')!;
 status.textContent = {
   loaded: 'Latest artwork restored.', missing: 'Ready for your first mark.',
   invalid: 'Saved artwork could not be read. Starting with an empty scene.',
   unavailable: 'Local storage unavailable. Paint may be lost on reload.',
 }[saved.status];
 status.dataset.error = String(saved.status === 'invalid' || saved.status === 'unavailable');
+function renderLayers(artwork: ArtworkDocument): void {
+  renderLayerPanel(artwork, layerList, layerStatus, {
+    select: layerId => { painter.setActiveLayer(layerId); syncLayerStatus(layerStatus, `${painter.getDocument().layers.find(layer => layer.id === layerId)?.name ?? 'Layer'} is active.`); },
+    rename: (layerId, name) => { painter.renameLayer(layerId, name); syncLayerStatus(layerStatus, `${painter.getDocument().layers.find(layer => layer.id === layerId)?.name ?? 'Layer'} renamed.`); },
+    lock: (layerId, locked) => { painter.setLayerLocked(layerId, locked); syncLayerStatus(layerStatus, `${painter.getDocument().layers.find(layer => layer.id === layerId)?.name ?? 'Layer'} ${locked ? 'locked' : 'unlocked'}.`); },
+    visible: (layerId, visible) => { painter.setLayerVisible(layerId, visible); syncLayerStatus(layerStatus, `${painter.getDocument().layers.find(layer => layer.id === layerId)?.name ?? 'Layer'} ${visible ? 'visible' : 'hidden'}.`); },
+    move: (layerId, direction) => { painter.moveLayer(layerId, direction); syncLayerStatus(layerStatus, `${painter.getDocument().layers.find(layer => layer.id === layerId)?.name ?? 'Layer'} moved ${direction}.`); },
+    duplicate: layerId => { const name = painter.getDocument().layers.find(layer => layer.id === layerId)?.name ?? 'Layer'; painter.duplicateLayer(layerId); syncLayerStatus(layerStatus, `${name} duplicated.`); },
+    delete: layerId => { const name = painter.getDocument().layers.find(layer => layer.id === layerId)?.name ?? 'Layer'; painter.deleteLayer(layerId); syncLayerStatus(layerStatus, `${name} deleted.`); },
+  });
+}
 function updateHistoryControls(state: { canUndo: boolean; canRedo: boolean }): void {
   undoButton.disabled = !state.canUndo;
   redoButton.disabled = !state.canRedo;
   undoButton.setAttribute('aria-disabled', String(!state.canUndo));
   redoButton.setAttribute('aria-disabled', String(!state.canRedo));
 }
-const painter = new TrainPainter(canvas, tool, marks => {
-  const success = saveArtwork({ marks, updatedAt: new Date().toISOString() }, undefined, activeScenario);
+const painter = new TrainPainter(canvas, tool, document => {
+  const artwork = document as ArtworkDocument;
+  const markCount = artwork.layers.reduce((total, layer) => total + layer.marks.length, 0);
+  const success = saveArtwork(artwork, undefined, activeScenario);
+  renderLayers(artwork);
   status.textContent = success
-    ? (marks.length ? `${activeScenario.label} artwork saved in this browser.` : `Empty ${activeScenario.label.toLowerCase()} scene saved in this browser.`)
+    ? (markCount ? `${activeScenario.label} artwork saved in this browser.` : `Empty ${activeScenario.label.toLowerCase()} scene saved in this browser.`)
     : 'Could not save. Changes may be lost on reload.';
   status.dataset.error = String(!success);
-}, saved.snapshot?.marks ?? [], activeScenario, state => {
+}, saved.document ?? createDefaultArtworkDocument(), activeScenario, state => {
   const stage = cursor.parentElement!;
   stage.dataset.cursor = String(state.visible ? 'active' : 'idle');
   cursor.style.setProperty('--cursor-x', `${state.x * 100}%`);
@@ -117,6 +150,12 @@ const painter = new TrainPainter(canvas, tool, marks => {
   cursor.style.setProperty('--cursor-color', state.color);
   cursor.style.setProperty('--cursor-opacity', String(state.opacity));
 }, updateHistoryControls);
+renderLayers(painter.getDocument());
+document.querySelector<HTMLButtonElement>('#add-layer')!.addEventListener('click', () => {
+  painter.createLayer();
+  const activeLayer = getActiveLayer(painter.getDocument());
+  syncLayerStatus(layerStatus, `${activeLayer?.name ?? 'New layer'} created and selected.`);
+});
 undoButton.addEventListener('click', () => painter.undo());
 redoButton.addEventListener('click', () => painter.redo());
 document.querySelector<HTMLButtonElement>('#clear-artwork')!.addEventListener('click', () => painter.clear());
@@ -131,8 +170,9 @@ document.querySelectorAll<HTMLButtonElement>('[data-scenario]').forEach(button =
     stage.append(currentCanvas);
     stage.append(cursor);
     currentCanvas.setAttribute('aria-label', activeScenario.ariaLabel);
-    const scenarioSaved = loadArtwork(undefined, activeScenario);
-    painter.setScenario(activeScenario, scenarioSaved.snapshot?.marks ?? []);
+    const scenarioSaved = loadArtworkDocument(undefined, activeScenario);
+    painter.setScenario(activeScenario, scenarioSaved.document ?? createDefaultArtworkDocument());
+    renderLayers(painter.getDocument());
     status.textContent = scenarioSaved.status === 'loaded'
       ? `${activeScenario.label} artwork restored.`
       : `Ready to paint the ${activeScenario.label.toLowerCase()}.`;
@@ -228,8 +268,12 @@ const storedGallery = loadGallery();
 let entries = storedGallery.entries ?? seededGallery();
 const galleryStatus = document.querySelector<HTMLParagraphElement>('#gallery-status')!;
 const exportStatus = document.querySelector<HTMLParagraphElement>('#export-status')!;
+const feedSummary = document.querySelector<HTMLParagraphElement>('#gallery-feed-summary')!;
 const feed = document.querySelector<HTMLDivElement>('#gallery-feed')!;
 const ranking = document.querySelector<HTMLOListElement>('#gallery-ranking')!;
+const rankingPrev = document.querySelector<HTMLButtonElement>('#ranking-prev')!;
+const rankingNext = document.querySelector<HTMLButtonElement>('#ranking-next')!;
+const rankingPageStatus = document.querySelector<HTMLSpanElement>('#ranking-page-status')!;
 galleryStatus.textContent = {
   loaded: 'Local display and votes restored.', missing: 'Built-in examples are ready. Add your train.',
   invalid: 'Saved display could not be read. Showing built-in examples.',
@@ -244,7 +288,9 @@ function persistGallery(message: string): void {
 }
 
 function renderGallery(): void {
-  feed.replaceChildren(...getRecentGallery(entries, 3).map(entry => {
+  const feedCards = getRecentGallery(entries, displayFeedLimit);
+  feedSummary.textContent = `Showing latest ${feedCards.length} of ${entries.length} creations.`;
+  feed.replaceChildren(...feedCards.map(entry => {
     const card = document.createElement('article');
     card.className = 'gallery-card';
     const image = document.createElement('img');
@@ -258,18 +304,22 @@ function renderGallery(): void {
     source.textContent = entry.source === 'seed' ? 'Built-in example / mock public' : 'Your submission / this browser only';
     const vote = document.createElement('button');
     vote.type = 'button';
+    vote.dataset.vote = entry.id;
     vote.textContent = `Upvote (${entry.votes})`;
     vote.setAttribute('aria-label', `Upvote ${entry.title}, ${entry.votes} votes`);
     vote.addEventListener('click', () => {
       entries = upvote(entries, entry.id);
       persistGallery(`Upvoted ${entry.title}.`);
       renderGallery();
-      document.querySelector<HTMLButtonElement>(`[data-vote="${entry.id}"]`)?.focus();
+      document.querySelector<HTMLButtonElement>(`#gallery-ranking [data-vote="${entry.id}"]`)?.focus()
+        ?? document.querySelector<HTMLButtonElement>(`#gallery-feed [data-vote="${entry.id}"]`)?.focus();
     });
     card.append(image, title, source, vote);
     return card;
   }));
-  ranking.replaceChildren(...rankGallery(entries).map(entry => {
+  const rankedPage = paginateGallery(rankGallery(entries), rankingPage, rankingPageSize);
+  rankingPage = rankedPage.page;
+  ranking.replaceChildren(...rankedPage.items.map(entry => {
     const item = document.createElement('li');
     item.className = 'ranking-card';
     const image = document.createElement('img');
@@ -295,12 +345,25 @@ function renderGallery(): void {
       entries = upvote(entries, entry.id);
       persistGallery(`Upvoted ${entry.title}.`);
       renderGallery();
-      document.querySelector<HTMLButtonElement>(`[data-vote="${entry.id}"]`)?.focus();
+      document.querySelector<HTMLButtonElement>(`#gallery-ranking [data-vote="${entry.id}"]`)?.focus()
+        ?? document.querySelector<HTMLButtonElement>(`#gallery-feed [data-vote="${entry.id}"]`)?.focus();
     });
     item.append(image, title, votes, zoom, vote);
     return item;
   }));
+  rankingPrev.disabled = rankingPage === 0;
+  rankingNext.disabled = rankingPage >= rankedPage.totalPages - 1;
+  rankingPageStatus.textContent = `Page ${rankingPage + 1} of ${rankedPage.totalPages}`;
 }
+
+rankingPrev.addEventListener('click', () => {
+  rankingPage = Math.max(0, rankingPage - 1);
+  renderGallery();
+});
+rankingNext.addEventListener('click', () => {
+  rankingPage += 1;
+  renderGallery();
+});
 
 function escapeHtml(value: string): string {
   return value.replace(/[&<>"]/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[character]!);
