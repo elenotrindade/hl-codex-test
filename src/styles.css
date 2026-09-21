@@ -78,6 +78,7 @@ input[type='range'] { width: 100%; min-height: 44px; margin-inline: 0; accent-co
 .export-actions button { width: calc(50% - 6px); }
 #download-artwork { background: var(--signal-amber); color: var(--ink-black); border-color: var(--ink-black); }
 #share-artwork { background: var(--paper); color: var(--rail-steel); }
+.gallery-feed-summary { margin-top: 0; font-size: 11px; color: var(--rail-steel); }
 .gallery-feed { display: grid; gap: 20px; }
 .gallery-card { min-width: 0; padding: 12px; border: 1px solid var(--rail-steel); background: #ebe1c9; }
 .gallery-card img { display: block; width: 100%; height: auto; background: #d4dbd4; }
@@ -90,6 +91,8 @@ input[type='range'] { width: 100%; min-height: 44px; margin-inline: 0; accent-co
 .ranking-card { background: #ebe1c9; border: 1px solid var(--rail-steel); }
 .ranking-card img { display: block; width: 100%; height: auto; background: #d4dbd4; }
 .ranking-card h3 { font-size: 16px; margin-bottom: 6px; }
+.ranking-pagination { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 12px; margin-top: 16px; }
+.ranking-pagination [role='status'] { min-width: 12ch; text-align: center; font-weight: bold; }
 dialog { max-width: min(92vw, 820px); border: 3px solid var(--ink-black); padding: 0; background: var(--paper); color: var(--ink-black); box-shadow: 8px 8px 0 #17151340; }
 dialog::backdrop { background: rgb(23 21 19 / .55); }
 .dialog-card { display: grid; gap: 12px; padding: 20px; }
