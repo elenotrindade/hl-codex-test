@@ -69,6 +69,15 @@ export function deleteLayer(snapshot: ArtworkSnapshot, layerId: string, updatedA
   return { ...snapshot, activeLayerId, layers: remaining, updatedAt };
 }
 
+export function reorderLayers(snapshot: ArtworkSnapshot, fromIndex: number, toIndex: number, updatedAt = new Date().toISOString()): ArtworkSnapshot {
+  if (!Number.isInteger(fromIndex) || !Number.isInteger(toIndex)) return snapshot;
+  if (fromIndex < 0 || toIndex < 0 || fromIndex >= snapshot.layers.length || toIndex >= snapshot.layers.length || fromIndex === toIndex) return snapshot;
+  const layers = snapshot.layers.map(layer => ({ ...layer, marks: copyMarks(layer.marks) }));
+  const [moved] = layers.splice(fromIndex, 1);
+  layers.splice(toIndex, 0, moved);
+  return { ...snapshot, layers, updatedAt };
+}
+
 export function getActiveLayer(snapshot: ArtworkSnapshot): PaintLayer {
   return snapshot.layers.find(layer => layer.id === snapshot.activeLayerId) ?? snapshot.layers[0];
 }

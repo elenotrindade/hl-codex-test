@@ -7,7 +7,7 @@ import { getScenario, scenarios, type PaintScenario } from './scenarios';
 import { openDialog } from './dialogs';
 import { exportTrainImage, type ExportAction, type ExportOutcome } from './artwork-export';
 import { createLayerPreview } from './layer-preview';
-import { addLayer, createDefaultLayer, createSnapshot, deleteLayer, replaceLayerMarks, selectLayer, toggleLayerVisibility, type ArtworkSnapshot } from './layers';
+import { addLayer, createDefaultLayer, createSnapshot, deleteLayer, reorderLayers, replaceLayerMarks, selectLayer, toggleLayerVisibility, type ArtworkSnapshot } from './layers';
 
 const tool: ToolState = { color: DEFAULT_COLOR, texture: 'solid', brushSize: 0.025, opacity: 0.9, weight: 1 };
 let activeScenario: PaintScenario = getScenario('train');
@@ -124,12 +124,50 @@ function persistArtwork(message: (saved: boolean) => string): void {
   status.dataset.error = String(!success);
 }
 const layerList = document.querySelector<HTMLOListElement>('#layer-list')!;
+let draggedLayerIndex: number | null = null;
+function moveLayer(fromIndex: number, toIndex: number): void {
+  const layer = artwork.layers[fromIndex];
+  const target = artwork.layers[toIndex];
+  const next = reorderLayers(artwork, fromIndex, toIndex);
+  if (next === artwork) return;
+  artwork = next;
+  painter.setArtwork(activeScenario, artwork);
+  renderLayers();
+  persistArtwork(success => success ? `${layer.name} moved ${toIndex < fromIndex ? 'above' : 'below'} ${target.name}.` : `${layer.name} moved, but the order could not be saved.`);
+}
 function renderLayers(): void {
-  layerList.replaceChildren(...artwork.layers.map(layer => {
+  draggedLayerIndex = null;
+  layerList.replaceChildren(...artwork.layers.map((layer, index) => {
     const item = document.createElement('li');
     item.className = 'layer-row';
     item.dataset.active = String(layer.id === artwork.activeLayerId);
     item.dataset.visible = String(layer.visible);
+    item.draggable = artwork.layers.length > 1;
+    item.setAttribute('aria-label', `${layer.name}, layer ${index + 1} of ${artwork.layers.length}`);
+    item.addEventListener('dragstart', event => {
+      draggedLayerIndex = index;
+      item.dataset.dragging = 'true';
+      event.dataTransfer?.setData('text/plain', layer.id);
+      if (event.dataTransfer) event.dataTransfer.effectAllowed = 'move';
+    });
+    item.addEventListener('dragover', event => {
+      if (draggedLayerIndex === null || draggedLayerIndex === index) return;
+      event.preventDefault();
+      item.dataset.dropTarget = 'true';
+      if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
+    });
+    item.addEventListener('dragleave', () => { delete item.dataset.dropTarget; });
+    item.addEventListener('drop', event => {
+      event.preventDefault();
+      delete item.dataset.dropTarget;
+      if (draggedLayerIndex === null) return;
+      moveLayer(draggedLayerIndex, index);
+    });
+    item.addEventListener('dragend', () => {
+      draggedLayerIndex = null;
+      delete item.dataset.dragging;
+      delete item.dataset.dropTarget;
+    });
     const button = document.createElement('button');
     button.type = 'button';
     button.className = 'layer-select';
@@ -175,7 +213,21 @@ function renderLayers(): void {
       const activeLayer = artwork.layers.find(item => item.id === artwork.activeLayerId)?.name ?? 'another layer';
       persistArtwork(success => success ? `${layer.name} deleted.${wasActive ? ` ${activeLayer} is now active.` : ''}` : `${layer.name} deleted, but the change could not be saved.`);
     });
-    item.append(button, visibility, remove);
+    const moveUp = document.createElement('button');
+    moveUp.type = 'button';
+    moveUp.className = 'icon-button';
+    moveUp.textContent = 'Up';
+    moveUp.disabled = index === 0;
+    moveUp.setAttribute('aria-label', `Move ${layer.name} up one layer`);
+    moveUp.addEventListener('click', () => moveLayer(index, index - 1));
+    const moveDown = document.createElement('button');
+    moveDown.type = 'button';
+    moveDown.className = 'icon-button';
+    moveDown.textContent = 'Dn';
+    moveDown.disabled = index === artwork.layers.length - 1;
+    moveDown.setAttribute('aria-label', `Move ${layer.name} down one layer`);
+    moveDown.addEventListener('click', () => moveLayer(index, index + 1));
+    item.append(button, moveUp, moveDown, visibility, remove);
     return item;
   }));
 }

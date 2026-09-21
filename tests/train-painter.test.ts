@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createPaintMark, TEXTURES, TrainPainter, type ToolState } from '../src/train-painter';
 import { getScenario } from '../src/scenarios';
-import { createDefaultLayer, createSnapshot } from '../src/layers';
+import { createDefaultLayer, createSnapshot, reorderLayers } from '../src/layers';
 
 const tool: ToolState = { color: '#e2483d', texture: 'solid', brushSize: 0.025, opacity: 0.8, weight: 1 };
 
@@ -184,6 +184,22 @@ describe('scenario-driven painting', () => {
     send('pointerdown', { clientX: 400 });
     expect(context.arc.mock.calls.map(call => call[0])).toEqual([300, 400, 600]);
     send('pointerup', { clientX: 400 });
+    painter.destroy();
+  });
+
+  it('replays reordered layers with the first UI row painted last', () => {
+    const { painter, context } = setup();
+    const bottomMark = createPaintMark({ x: 0.2, y: 0.5 }, { ...tool, color: '#111111' });
+    const middleMark = createPaintMark({ x: 0.5, y: 0.5 }, { ...tool, color: '#222222' });
+    const topMark = createPaintMark({ x: 0.8, y: 0.5 }, { ...tool, color: '#333333' });
+    const bottom = createDefaultLayer([bottomMark], 1000);
+    const middle = { ...createDefaultLayer([middleMark], 1500), id: 'middle', name: 'Layer 2' };
+    const top = { ...createDefaultLayer([topMark], 2000), id: 'top', name: 'Layer 3' };
+    const snapshot = createSnapshot(getScenario('train'), [top, middle, bottom], 'middle');
+    const reordered = reorderLayers(snapshot, 1, 0);
+    context.arc.mockClear();
+    painter.setArtwork(getScenario('train'), reordered);
+    expect(context.arc.mock.calls.map(call => call[0])).toEqual([200, 800, 500]);
     painter.destroy();
   });
 

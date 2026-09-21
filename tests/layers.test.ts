@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { addLayer, appendMarksToLayer, createDefaultLayer, createSnapshot, deleteLayer, getRenderableLayers, getRenderableMarks, selectLayer, toggleLayerVisibility } from '../src/layers';
+import { addLayer, appendMarksToLayer, createDefaultLayer, createSnapshot, deleteLayer, getRenderableLayers, getRenderableMarks, reorderLayers, selectLayer, toggleLayerVisibility } from '../src/layers';
 import { getScenario } from '../src/scenarios';
 import { type PaintMark } from '../src/train-painter';
 
@@ -65,5 +65,24 @@ describe('layers', () => {
     const withoutInactive = deleteLayer(withoutActive, 'layer-1');
     expect(withoutInactive.activeLayerId).toBe('middle');
     expect(deleteLayer(withoutInactive, 'middle')).toBe(withoutInactive);
+  });
+
+  it('reorders layers in top-to-bottom UI order without changing render invariants', () => {
+    const bottom = createDefaultLayer([mark(0.2, '#111111')], 1000);
+    const middle = { ...createDefaultLayer([mark(0.5, '#222222')], 1500), id: 'middle', name: 'Layer 2' };
+    const top = { ...createDefaultLayer([mark(0.8, '#333333')], 2000), id: 'top', name: 'Layer 3' };
+    const snapshot = createSnapshot(getScenario('train'), [top, middle, bottom], 'middle', '2026-09-17T12:00:00.000Z');
+    const reordered = reorderLayers(snapshot, 1, 0, '2026-09-17T12:04:00.000Z');
+    expect(reordered.layers.map(layer => layer.id)).toEqual(['middle', 'top', 'layer-1']);
+    expect(reordered.activeLayerId).toBe('middle');
+    expect(reordered.updatedAt).toBe('2026-09-17T12:04:00.000Z');
+    expect(getRenderableLayers(reordered.layers).map(layer => layer.id)).toEqual(['layer-1', 'top', 'middle']);
+  });
+
+  it('ignores invalid reorder indexes', () => {
+    const snapshot = createSnapshot(getScenario('train'), [createDefaultLayer([], 1000)]);
+    expect(reorderLayers(snapshot, 0, 0)).toBe(snapshot);
+    expect(reorderLayers(snapshot, -1, 0)).toBe(snapshot);
+    expect(reorderLayers(snapshot, 0, 2)).toBe(snapshot);
   });
 });
