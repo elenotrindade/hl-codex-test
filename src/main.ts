@@ -6,6 +6,7 @@ import { seededGallery, publishArtwork, upvote, rankGallery, getRecentGallery, t
 import { getScenario, scenarios, type PaintScenario } from './scenarios';
 import { openDialog } from './dialogs';
 import { exportTrainImage, type ExportAction, type ExportOutcome } from './artwork-export';
+import { addLayer, createDefaultLayer, createSnapshot, replaceLayerMarks, selectLayer, type ArtworkSnapshot } from './layers';
 
 const tool: ToolState = { color: DEFAULT_COLOR, texture: 'solid', brushSize: 0.025, opacity: 0.9, weight: 1 };
 let activeScenario: PaintScenario = getScenario('train');
@@ -64,6 +65,10 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
         <label for="brush-weight">Brush weight <output id="weight-value" for="brush-weight">1.0x</output></label>
         <input id="brush-weight" type="range" min="50" max="200" value="100" aria-valuetext="1.0 times pressure" />
         <p id="clear-help" class="tool-note">Undo and redo work by complete stroke. Clear removes all paint.</p>
+        <div class="layer-panel" aria-labelledby="layers-heading">
+          <div class="layer-panel__heading"><h3 id="layers-heading">Layers</h3><button type="button" id="add-layer">Add layer</button></div>
+          <ol id="layer-list" class="layer-list"></ol>
+        </div>
         <p id="save-status" role="status" aria-live="polite"></p>
       </aside>
     <section class="display-panel" aria-labelledby="display-heading">
@@ -98,6 +103,7 @@ const cursor = document.querySelector<HTMLDivElement>('.brush-cursor')!;
 const undoButton = document.querySelector<HTMLButtonElement>('#undo-stroke')!;
 const redoButton = document.querySelector<HTMLButtonElement>('#redo-stroke')!;
 const saved = loadArtwork(undefined, activeScenario);
+let artwork: ArtworkSnapshot = saved.snapshot ?? createSnapshot(activeScenario, [createDefaultLayer()]);
 const status = document.querySelector<HTMLParagraphElement>('#save-status')!;
 status.textContent = {
   loaded: 'Latest artwork restored.', missing: 'Ready for your first mark.',
@@ -111,13 +117,38 @@ function updateHistoryControls(state: { canUndo: boolean; canRedo: boolean }): v
   undoButton.setAttribute('aria-disabled', String(!state.canUndo));
   redoButton.setAttribute('aria-disabled', String(!state.canRedo));
 }
-const painter = new TrainPainter(canvas, tool, marks => {
-  const success = saveArtwork({ marks, updatedAt: new Date().toISOString() }, undefined, activeScenario);
-  status.textContent = success
-    ? (marks.length ? `${activeScenario.label} artwork saved in this browser.` : `Empty ${activeScenario.label.toLowerCase()} scene saved in this browser.`)
-    : 'Could not save. Changes may be lost on reload.';
+function persistArtwork(message: (saved: boolean) => string): void {
+  const success = saveArtwork(artwork, undefined, activeScenario);
+  status.textContent = message(success);
   status.dataset.error = String(!success);
-}, saved.snapshot?.marks ?? [], activeScenario, state => {
+}
+const layerList = document.querySelector<HTMLOListElement>('#layer-list')!;
+function renderLayers(): void {
+  layerList.replaceChildren(...artwork.layers.map(layer => {
+    const item = document.createElement('li');
+    item.className = 'layer-row';
+    item.dataset.active = String(layer.id === artwork.activeLayerId);
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.textContent = `${layer.name} (${layer.marks.length})`;
+    button.setAttribute('aria-pressed', String(layer.id === artwork.activeLayerId));
+    button.addEventListener('click', () => {
+      artwork = selectLayer(artwork, layer.id);
+      painter.setArtwork(activeScenario, artwork);
+      renderLayers();
+      persistArtwork(success => success ? `${layer.name} selected.` : `${layer.name} selected, but the choice could not be saved.`);
+    });
+    item.append(button);
+    return item;
+  }));
+}
+const painter = new TrainPainter(canvas, tool, marks => {
+  artwork = replaceLayerMarks(artwork, artwork.activeLayerId, marks);
+  renderLayers();
+  persistArtwork(success => success
+    ? (marks.length ? `${activeScenario.label} artwork saved in this browser.` : `Active layer cleared in this browser.`)
+    : 'Could not save. Changes may be lost on reload.');
+}, [], activeScenario, state => {
   const stage = cursor.parentElement!;
   stage.dataset.cursor = String(state.visible ? 'active' : 'idle');
   cursor.style.setProperty('--cursor-x', `${state.x * 100}%`);
@@ -126,6 +157,14 @@ const painter = new TrainPainter(canvas, tool, marks => {
   cursor.style.setProperty('--cursor-color', state.color);
   cursor.style.setProperty('--cursor-opacity', String(state.opacity));
 }, updateHistoryControls);
+painter.setArtwork(activeScenario, artwork);
+renderLayers();
+document.querySelector<HTMLButtonElement>('#add-layer')!.addEventListener('click', () => {
+  artwork = addLayer(artwork);
+  painter.setArtwork(activeScenario, artwork);
+  renderLayers();
+  persistArtwork(success => success ? 'New layer added and selected.' : 'New layer added, but it could not be saved.');
+});
 undoButton.addEventListener('click', () => painter.undo());
 redoButton.addEventListener('click', () => painter.redo());
 document.querySelector<HTMLButtonElement>('#clear-artwork')!.addEventListener('click', () => painter.clear());
@@ -134,7 +173,7 @@ scenarioSelect.addEventListener('change', () => {
   const nextScenario = getScenario(scenarioSelect.value as typeof activeScenario.id);
   if (nextScenario.id === activeScenario.id) return;
 
-  if (painter.getMarks().length && !window.confirm(`Change to the ${nextScenario.label.toLowerCase()} canvas? Your current artwork will be cleared.`)) {
+  if (artwork.layers.some(layer => layer.marks.length) && !window.confirm(`Change to the ${nextScenario.label.toLowerCase()} canvas? Your current artwork will be cleared.`)) {
     scenarioSelect.value = activeScenario.id;
     return;
   }
@@ -147,12 +186,10 @@ scenarioSelect.addEventListener('change', () => {
   stage.append(currentCanvas);
   stage.append(cursor);
   currentCanvas.setAttribute('aria-label', activeScenario.ariaLabel);
-  painter.setScenario(activeScenario, []);
-  const success = saveArtwork({ marks: [], updatedAt: new Date().toISOString() }, undefined, activeScenario);
-  status.textContent = success
-    ? `${activeScenario.label} canvas ready. Previous artwork cleared.`
-    : `Ready to paint the ${activeScenario.label.toLowerCase()}, but the blank scene could not be saved.`;
-  status.dataset.error = String(!success);
+  artwork = createSnapshot(activeScenario, [createDefaultLayer()]);
+  painter.setArtwork(activeScenario, artwork);
+  renderLayers();
+  persistArtwork(success => success ? `${activeScenario.label} canvas ready. Previous artwork cleared.` : `Ready to paint the ${activeScenario.label.toLowerCase()}, but the blank scene could not be saved.`);
 });
 document.querySelectorAll<HTMLButtonElement>('[data-texture]').forEach(button => {
   button.addEventListener('click', () => {

@@ -1,5 +1,6 @@
 import { getScenario, isInsidePaintableArea, type PaintScenario } from './scenarios';
 import { type Point } from './train-template';
+import { getActiveLayer, getRenderableMarks, replaceLayerMarks, type ArtworkSnapshot } from './layers';
 
 export const TEXTURES = ['solid', 'spray', 'marker'] as const;
 export type TextureId = typeof TEXTURES[number];
@@ -36,6 +37,8 @@ export function createPaintMark(point: Point, tool: ToolState, pressure = 0): Pa
 export class TrainPainter {
   private readonly context: CanvasRenderingContext2D;
   private readonly marks: PaintMark[] = [];
+  private renderMarks: PaintMark[] = [];
+  private artwork: ArtworkSnapshot | null = null;
   private currentStroke: PaintStroke = [];
   private undoStack: PaintStroke[] = [];
   private redoStack: PaintStroke[] = [];
@@ -79,10 +82,27 @@ export class TrainPainter {
   setScenario(scenario: PaintScenario, marks: PaintMark[] = []): void {
     this.cancel();
     this.scenario = scenario;
+    this.artwork = null;
     this.marks.length = 0;
     this.marks.push(...marks.map(mark => ({ ...mark })));
+    this.renderMarks = this.marks.map(mark => ({ ...mark }));
     this.currentStroke = [];
     this.undoStack = marks.length ? [marks.map(mark => ({ ...mark }))] : [];
+    this.redoStack = [];
+    this.resize(true);
+    this.notifyHistoryChange();
+  }
+
+  setArtwork(scenario: PaintScenario, snapshot: ArtworkSnapshot): void {
+    this.cancel();
+    this.scenario = scenario;
+    this.artwork = { ...snapshot, layers: snapshot.layers.map(layer => ({ ...layer, marks: layer.marks.map(mark => ({ ...mark })) })) };
+    const activeMarks = getActiveLayer(snapshot).marks;
+    this.marks.length = 0;
+    this.marks.push(...activeMarks.map(mark => ({ ...mark })));
+    this.renderMarks = getRenderableMarks(snapshot.layers);
+    this.currentStroke = [];
+    this.undoStack = activeMarks.length ? [activeMarks.map(mark => ({ ...mark }))] : [];
     this.redoStack = [];
     this.resize(true);
     this.notifyHistoryChange();
@@ -141,7 +161,8 @@ export class TrainPainter {
     }
     this.context.clip();
     this.previous = null;
-    for (const mark of this.marks) this.render(mark);
+    const marks = this.renderMarks.length ? this.renderMarks : this.marks;
+    for (const mark of marks) this.render(mark);
   };
 
   async createSnapshot(): Promise<string> {
@@ -173,11 +194,12 @@ export class TrainPainter {
 
   clear(): void {
     this.marks.length = 0;
+    this.syncLayeredArtwork();
     this.cancel(false);
     this.currentStroke = [];
     this.undoStack = [];
     this.redoStack = [];
-    this.context.clearRect(0, 0, this.scenario.width, this.scenario.height);
+    if (this.artwork) this.resize(true); else this.context.clearRect(0, 0, this.scenario.width, this.scenario.height);
     this.emitChange();
   }
 
@@ -217,14 +239,25 @@ export class TrainPainter {
     if (!isInsidePaintableArea(this.scenario, point)) return;
     const mark = createPaintMark(point, this.tool, pressure);
     this.marks.push(mark);
+    this.syncLayeredArtwork();
     this.currentStroke.push({ ...mark });
-    this.render(mark);
+    if (this.artwork) this.resize(true); else this.render(mark);
   }
 
   private replayFromHistory(): void {
     this.marks.length = 0;
     this.marks.push(...this.undoStack.flat().map(mark => ({ ...mark })));
+    this.syncLayeredArtwork();
     this.resize(true);
+  }
+
+  private syncLayeredArtwork(): void {
+    if (!this.artwork) {
+      this.renderMarks = this.marks.map(mark => ({ ...mark }));
+      return;
+    }
+    this.artwork = replaceLayerMarks(this.artwork, this.artwork.activeLayerId, this.marks);
+    this.renderMarks = getRenderableMarks(this.artwork.layers);
   }
 
   private emitChange(): void {

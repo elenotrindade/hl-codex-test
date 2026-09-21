@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createPaintMark, TEXTURES, TrainPainter, type ToolState } from '../src/train-painter';
 import { getScenario } from '../src/scenarios';
+import { createDefaultLayer, createSnapshot } from '../src/layers';
 
 const tool: ToolState = { color: '#e2483d', texture: 'solid', brushSize: 0.025, opacity: 0.8, weight: 1 };
 
@@ -131,6 +132,55 @@ describe('scenario-driven painting', () => {
     send('pointerdown', { clientX: 500, clientY: 340 });
     send('pointerup');
     expect(onChange).not.toHaveBeenCalled();
+    painter.destroy();
+  });
+
+  it('replays layered artwork bottom-to-top and paints into the active layer', () => {
+    const { painter, context, send, onChange } = setup();
+    const bottomMark = createPaintMark({ x: 0.4, y: 0.5 }, { ...tool, color: '#111111' });
+    const topMark = createPaintMark({ x: 0.6, y: 0.5 }, { ...tool, color: '#222222' });
+    const bottom = createDefaultLayer([bottomMark], 1000);
+    const top = { ...createDefaultLayer([topMark], 2000), id: 'top', name: 'Layer 2' };
+    context.arc.mockClear();
+    painter.setArtwork(getScenario('train'), createSnapshot(getScenario('train'), [top, bottom], 'top'));
+    expect(context.arc.mock.calls.map(call => call[0])).toEqual([400, 600]);
+    send('pointerdown', { clientX: 700 });
+    send('pointerup', { clientX: 700 });
+    expect(onChange).toHaveBeenLastCalledWith([topMark, createPaintMark({ x: 0.7, y: 0.5 }, tool)]);
+    painter.destroy();
+  });
+
+  it('keeps higher layers above new marks painted into a lower active layer', () => {
+    const { painter, context, send } = setup();
+    const bottomMark = createPaintMark({ x: 0.3, y: 0.5 }, { ...tool, color: '#111111' });
+    const topMark = createPaintMark({ x: 0.6, y: 0.5 }, { ...tool, color: '#222222' });
+    const bottom = createDefaultLayer([bottomMark], 1000);
+    const top = { ...createDefaultLayer([topMark], 2000), id: 'top', name: 'Layer 2' };
+    painter.setArtwork(getScenario('train'), createSnapshot(getScenario('train'), [top, bottom], bottom.id));
+    context.arc.mockClear();
+    send('pointerdown', { clientX: 400 });
+    expect(context.arc.mock.calls.map(call => call[0])).toEqual([300, 400, 600]);
+    send('pointerup', { clientX: 400 });
+    painter.destroy();
+  });
+
+  it('keeps other layers in replay order after undo and redo on an active layer', () => {
+    const { painter, context, send } = setup();
+    const bottomMark = createPaintMark({ x: 0.3, y: 0.5 }, { ...tool, color: '#111111' });
+    const activeMark = createPaintMark({ x: 0.4, y: 0.5 }, { ...tool, color: '#333333' });
+    const topMark = createPaintMark({ x: 0.7, y: 0.5 }, { ...tool, color: '#222222' });
+    const active = { ...createDefaultLayer([activeMark], 1500), id: 'active', name: 'Layer 2' };
+    const bottom = createDefaultLayer([bottomMark], 1000);
+    const top = { ...createDefaultLayer([topMark], 2000), id: 'top', name: 'Layer 3' };
+    painter.setArtwork(getScenario('train'), createSnapshot(getScenario('train'), [top, active, bottom], active.id));
+    send('pointerdown', { clientX: 500 });
+    send('pointerup', { clientX: 500 });
+    context.arc.mockClear();
+    painter.undo();
+    expect(context.arc.mock.calls.map(call => call[0])).toEqual([300, 400, 700]);
+    context.arc.mockClear();
+    painter.redo();
+    expect(context.arc.mock.calls.map(call => call[0])).toEqual([300, 400, 500, 700]);
     painter.destroy();
   });
 

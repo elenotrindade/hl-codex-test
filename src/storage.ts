@@ -1,8 +1,8 @@
 import { TEXTURES, type PaintMark } from './train-painter';
 import { getScenario, isInsidePaintableArea, type PaintScenario } from './scenarios';
 import { isGallery, type GalleryEntry } from './gallery';
+import { createDefaultLayer, createSnapshot, type ArtworkSnapshot, type PaintLayer } from './layers';
 
-export type ArtworkSnapshot = { marks: PaintMark[]; updatedAt: string };
 export const ARTWORK_KEY = 'train-graffiti.artwork.v1';
 export const GALLERY_KEY = 'train-graffiti.gallery.v1';
 type StorageAccess = () => Pick<Storage, 'getItem' | 'setItem'>;
@@ -21,8 +21,25 @@ function isMark(value: unknown, scenario: PaintScenario): value is PaintMark {
 function isSnapshot(value: unknown, scenario: PaintScenario): value is ArtworkSnapshot {
   if (!value || typeof value !== 'object') return false;
   const snapshot = value as ArtworkSnapshot;
+  return snapshot.scenarioId === scenario.id && typeof snapshot.activeLayerId === 'string' && Array.isArray(snapshot.layers) &&
+    snapshot.layers.length > 0 && snapshot.layers.every(layer => isLayer(layer, scenario)) &&
+    snapshot.layers.some(layer => layer.id === snapshot.activeLayerId) &&
+    typeof snapshot.updatedAt === 'string' && Number.isFinite(Date.parse(snapshot.updatedAt));
+}
+
+function isLegacySnapshot(value: unknown, scenario: PaintScenario): value is { marks: PaintMark[]; updatedAt: string } {
+  if (!value || typeof value !== 'object') return false;
+  const snapshot = value as { marks: PaintMark[]; updatedAt: string };
   return Array.isArray(snapshot.marks) && snapshot.marks.every(mark => isMark(mark, scenario)) &&
     typeof snapshot.updatedAt === 'string' && Number.isFinite(Date.parse(snapshot.updatedAt));
+}
+
+function isLayer(value: unknown, scenario: PaintScenario): value is PaintLayer {
+  if (!value || typeof value !== 'object') return false;
+  const layer = value as PaintLayer;
+  return typeof layer.id === 'string' && layer.id.length > 0 && typeof layer.name === 'string' && layer.name.length > 0 &&
+    Array.isArray(layer.marks) && layer.marks.every(mark => isMark(mark, scenario)) && typeof layer.visible === 'boolean' &&
+    Number.isFinite(layer.createdAt);
 }
 
 export function loadArtwork(access: StorageAccess = browserStorage, scenario: PaintScenario = getScenario('train')): LoadResult {
@@ -33,6 +50,7 @@ export function loadArtwork(access: StorageAccess = browserStorage, scenario: Pa
   try {
     const value: unknown = JSON.parse(raw);
     if (isSnapshot(value, scenario)) return { snapshot: value, status: 'loaded' };
+    if (isLegacySnapshot(value, scenario)) return { snapshot: createSnapshot(scenario, [createDefaultLayer(value.marks)], undefined, value.updatedAt), status: 'loaded' };
   } catch { /* Invalid JSON is treated like an invalid snapshot. */ }
   return { snapshot: null, status: 'invalid' };
 }
