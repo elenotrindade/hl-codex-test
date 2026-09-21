@@ -12,7 +12,15 @@ let activeScenario: PaintScenario = getScenario('train');
 document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   <a class="skip-link" href="#workshop">Skip to the workshop</a>
   <main>
-    <div class="yard-strip">YARD / OPEN CANVAS / NO. 001</div>
+    <div class="yard-strip">
+      <span>YARD / OPEN CANVAS / NO. 001</span>
+      <label for="scenario-select">Canvas
+        <select id="scenario-select" aria-describedby="scenario-select-help">
+          ${scenarios.map(scenario => `<option value="${scenario.id}"${scenario.id === activeScenario.id ? ' selected' : ''}>${scenario.label}</option>`).join('')}
+        </select>
+      </label>
+      <span id="scenario-select-help">Changing canvas clears the current artwork after confirmation.</span>
+    </div>
     <header>
       <h1>Leave your <em>mark.</em></h1>
       <p>Pick a real street surface. Dial in a fresh paint mix, then drag directly over the photo-lit panel.</p>
@@ -20,9 +28,6 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
     <section id="workshop" class="workshop" aria-label="Street painting workshop" tabindex="-1">
       <div class="stage-panel">
         <div class="stage-heading"><h2>01 / Make it yours</h2><span id="scenario-stamp">TRAIN</span></div>
-        <div class="scenario-tabs" role="group" aria-label="Street scenario">
-          ${scenarios.map(scenario => `<button type="button" data-scenario="${scenario.id}" aria-pressed="${scenario.id === activeScenario.id}">${scenario.label}</button>`).join('')}
-        </div>
         <div class="paint-stage" aria-live="polite">${activeScenario.template()}<canvas aria-label="${activeScenario.ariaLabel}" aria-describedby="paint-help">Canvas support is required to paint.</canvas><div class="brush-cursor" aria-hidden="true"></div></div>
         <p id="paint-help">Drag with a mouse, pen, or finger. Paint stays inside the active street surface.</p>
         <p class="stage-stamp" aria-hidden="true">YOUR CITY. YOUR COLORS.</p>
@@ -120,24 +125,30 @@ const painter = new TrainPainter(canvas, tool, marks => {
 undoButton.addEventListener('click', () => painter.undo());
 redoButton.addEventListener('click', () => painter.redo());
 document.querySelector<HTMLButtonElement>('#clear-artwork')!.addEventListener('click', () => painter.clear());
-document.querySelectorAll<HTMLButtonElement>('[data-scenario]').forEach(button => {
-  button.addEventListener('click', () => {
-    activeScenario = getScenario(button.dataset.scenario as typeof activeScenario.id);
-    document.querySelectorAll<HTMLButtonElement>('[data-scenario]').forEach(tab => tab.setAttribute('aria-pressed', String(tab === button)));
-    document.querySelector<HTMLSpanElement>('#scenario-stamp')!.textContent = activeScenario.label.toUpperCase();
-    const stage = document.querySelector<HTMLDivElement>('.paint-stage')!;
-    const currentCanvas = stage.querySelector('canvas')!;
-    stage.innerHTML = `${activeScenario.template()}`;
-    stage.append(currentCanvas);
-    stage.append(cursor);
-    currentCanvas.setAttribute('aria-label', activeScenario.ariaLabel);
-    const scenarioSaved = loadArtwork(undefined, activeScenario);
-    painter.setScenario(activeScenario, scenarioSaved.snapshot?.marks ?? []);
-    status.textContent = scenarioSaved.status === 'loaded'
-      ? `${activeScenario.label} artwork restored.`
-      : `Ready to paint the ${activeScenario.label.toLowerCase()}.`;
-    status.dataset.error = 'false';
-  });
+const scenarioSelect = document.querySelector<HTMLSelectElement>('#scenario-select')!;
+scenarioSelect.addEventListener('change', () => {
+  const nextScenario = getScenario(scenarioSelect.value as typeof activeScenario.id);
+  if (nextScenario.id === activeScenario.id) return;
+
+  if (painter.getMarks().length && !window.confirm(`Change to the ${nextScenario.label.toLowerCase()} canvas? Your current artwork will be cleared.`)) {
+    scenarioSelect.value = activeScenario.id;
+    return;
+  }
+
+  activeScenario = nextScenario;
+  document.querySelector<HTMLSpanElement>('#scenario-stamp')!.textContent = activeScenario.label.toUpperCase();
+  const stage = document.querySelector<HTMLDivElement>('.paint-stage')!;
+  const currentCanvas = stage.querySelector('canvas')!;
+  stage.innerHTML = `${activeScenario.template()}`;
+  stage.append(currentCanvas);
+  stage.append(cursor);
+  currentCanvas.setAttribute('aria-label', activeScenario.ariaLabel);
+  painter.setScenario(activeScenario, []);
+  const success = saveArtwork({ marks: [], updatedAt: new Date().toISOString() }, undefined, activeScenario);
+  status.textContent = success
+    ? `${activeScenario.label} canvas ready. Previous artwork cleared.`
+    : `Ready to paint the ${activeScenario.label.toLowerCase()}, but the blank scene could not be saved.`;
+  status.dataset.error = String(!success);
 });
 document.querySelectorAll<HTMLButtonElement>('[data-texture]').forEach(button => {
   button.addEventListener('click', () => {
