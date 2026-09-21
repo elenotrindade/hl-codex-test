@@ -95,6 +95,7 @@ dialog::backdrop { background: rgb(23 21 19 / .55); }
 .dialog-card img { display: block; width: 100%; height: auto; background: #d4dbd4; }
 .platforms { display: flex; flex-wrap: wrap; gap: 8px; }
 footer { margin-top: 24px; line-height: 1.6; }
+footer .sponsor-link { margin-inline-start: 12px; color: var(--rail-steel); text-decoration: underline; text-decoration-thickness: 2px; text-underline-offset: 3px; overflow-wrap: anywhere; }
 @media (hover: hover) { button:hover:not(:disabled) { border-color: var(--ink-black); filter: brightness(.95); } }
 @media (prefers-reduced-motion: no-preference) {
   header, .workshop, .ranking-panel { animation: yard-arrival .45s ease-out both; }

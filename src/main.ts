@@ -6,6 +6,7 @@ import { getScenario, scenarios, type PaintScenario } from './scenarios';
 import { formatHexColor, hsvToRgb, parseHexColor, rgbToHsv, type HsvColor, type RgbColor } from './color-tools';
 import { openDialog } from './dialogs';
 import { exportTrainImage, type ExportAction, type ExportOutcome } from './artwork-export';
+import { mountSponsor, sponsorConfig } from './sponsorship';
 
 const colors = [
   ['Signal red', '#e2483d'], ['Amber', '#f1aa2d'], ['Chalk', '#fff4db'],
@@ -360,4 +361,5 @@ publish.addEventListener('click', async () => {
     publish.removeAttribute('aria-busy');
   }
 });
+mountSponsor(document.querySelector<HTMLElement>('footer'), sponsorConfig, document);
 if (import.meta.hot) import.meta.hot.dispose(() => painter.destroy());
