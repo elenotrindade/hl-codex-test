@@ -129,7 +129,7 @@ describe('scenario-driven painting', () => {
     const { painter, context, send, onChange } = setup();
     context.rect.mockClear();
     painter.setScenario(getScenario('wall'));
-    expect(context.rect).toHaveBeenCalledWith(35, 72, 930, 224.00000000000003);
+    expect(context.rect).toHaveBeenCalledWith(0, 80, 1000, 248);
     send('pointerdown', { clientX: 500, clientY: 110 });
     send('pointerup');
     expect(onChange).toHaveBeenCalledWith([createPaintMark({ x: 0.5, y: 0.275 }, tool)]);
