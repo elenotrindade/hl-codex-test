@@ -1,0 +1,107 @@
+import { getActiveLayer, type ArtworkDocument } from './artwork-document';
+
+export type LayerPanelHandlers = {
+  select(layerId: string): void;
+  rename(layerId: string, name: string): void;
+  lock(layerId: string, locked: boolean): void;
+  visible(layerId: string, visible: boolean): void;
+  move(layerId: string, direction: 'up' | 'down'): void;
+  duplicate(layerId: string): void;
+  delete(layerId: string): void;
+};
+
+export function syncLayerStatus(layerStatus: HTMLElement, message: string, error = false): void {
+  layerStatus.textContent = message;
+  layerStatus.dataset.error = String(error);
+}
+
+export function renderLayerPanel(artwork: ArtworkDocument, layerList: HTMLElement, layerStatus: HTMLElement, handlers: LayerPanelHandlers): void {
+  layerList.replaceChildren(...[...artwork.layers].reverse().map((layer, visualIndex) => {
+    const row = document.createElement('article');
+    row.className = 'layer-row';
+    row.dataset.layerId = layer.id;
+    row.setAttribute('role', 'listitem');
+    const active = layer.id === artwork.activeLayerId;
+    const stackNumber = document.createElement('span');
+    stackNumber.className = 'layer-row__number';
+    stackNumber.textContent = String(artwork.layers.length - visualIndex).padStart(2, '0');
+    stackNumber.setAttribute('aria-label', `Stack position ${artwork.layers.length - visualIndex}`);
+    const meta = document.createElement('span');
+    meta.className = 'layer-row__meta';
+    meta.textContent = active ? 'Active layer' : 'Standby layer';
+    const select = document.createElement('button');
+    select.type = 'button';
+    select.dataset.layerSelect = 'true';
+    select.textContent = active ? 'Active' : 'Select';
+    select.setAttribute('aria-label', `${active ? 'Active layer' : 'Select layer'} ${layer.name}`);
+    select.setAttribute('aria-pressed', String(active));
+    select.addEventListener('click', () => handlers.select(layer.id));
+    const name = document.createElement('input');
+    name.dataset.layerName = 'true';
+    name.value = layer.name;
+    name.setAttribute('aria-label', `Layer name for ${layer.name}`);
+    name.addEventListener('change', () => handlers.rename(layer.id, name.value));
+    const visible = document.createElement('button');
+    visible.type = 'button';
+    visible.dataset.layerVisible = 'true';
+    visible.textContent = layer.visible ? 'Shown' : 'Hidden';
+    visible.setAttribute('aria-label', `${layer.visible ? 'Hide' : 'Show'} ${layer.name}`);
+    visible.setAttribute('aria-pressed', String(layer.visible));
+    visible.addEventListener('click', () => handlers.visible(layer.id, !layer.visible));
+    const lock = document.createElement('button');
+    lock.type = 'button';
+    lock.dataset.layerLock = 'true';
+    lock.textContent = layer.locked ? 'Locked' : 'Unlocked';
+    lock.setAttribute('aria-label', `${layer.locked ? 'Unlock' : 'Lock'} ${layer.name}`);
+    lock.setAttribute('aria-pressed', String(layer.locked));
+    lock.addEventListener('click', () => handlers.lock(layer.id, !layer.locked));
+    const up = document.createElement('button');
+    up.type = 'button';
+    up.dataset.layerUp = 'true';
+    up.textContent = 'Up';
+    up.setAttribute('aria-label', `Move ${layer.name} up`);
+    up.addEventListener('click', () => handlers.move(layer.id, 'up'));
+    const down = document.createElement('button');
+    down.type = 'button';
+    down.dataset.layerDown = 'true';
+    down.textContent = 'Down';
+    down.setAttribute('aria-label', `Move ${layer.name} down`);
+    down.addEventListener('click', () => handlers.move(layer.id, 'down'));
+    const duplicate = document.createElement('button');
+    duplicate.type = 'button';
+    duplicate.dataset.layerDuplicate = 'true';
+    duplicate.textContent = 'Duplicate';
+    duplicate.setAttribute('aria-label', `Duplicate ${layer.name}`);
+    duplicate.addEventListener('click', () => handlers.duplicate(layer.id));
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.dataset.layerDelete = 'true';
+    remove.className = 'layer-row__delete';
+    remove.textContent = 'Delete';
+    remove.setAttribute('aria-label', `Delete ${layer.name}`);
+    remove.addEventListener('click', () => handlers.delete(layer.id));
+    const index = artwork.layers.findIndex(item => item.id === layer.id);
+    up.disabled = index === artwork.layers.length - 1;
+    down.disabled = index === 0;
+    remove.disabled = artwork.layers.length === 1;
+    up.setAttribute('aria-disabled', String(up.disabled));
+    down.setAttribute('aria-disabled', String(down.disabled));
+    remove.setAttribute('aria-disabled', String(remove.disabled));
+    const toggles = document.createElement('div');
+    toggles.className = 'layer-row__toggles';
+    toggles.append(visible, lock);
+    const stack = document.createElement('div');
+    stack.className = 'layer-row__stack';
+    stack.append(up, down);
+    const actions = document.createElement('div');
+    actions.className = 'layer-row__actions';
+    actions.append(duplicate, remove);
+    row.append(stackNumber, meta, select, name, toggles, stack, actions);
+    row.dataset.active = String(active);
+    row.dataset.locked = String(layer.locked);
+    row.dataset.visible = String(layer.visible);
+    return row;
+  }));
+  const activeLayer = getActiveLayer(artwork);
+  syncLayerStatus(layerStatus, activeLayer ? `${activeLayer.name} is active.` : 'No active layer.', !activeLayer);
+}
