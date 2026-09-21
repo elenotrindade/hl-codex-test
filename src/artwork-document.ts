@@ -24,6 +24,20 @@ export type ArtworkSnapshot = { marks: PaintMark[]; updatedAt: string };
 
 function cloneMark(mark: PaintMark): PaintMark { return { ...mark }; }
 
+function timestamp(updatedAt = new Date().toISOString()): string { return updatedAt; }
+
+function uniqueLayerId(document: ArtworkDocument): string {
+  const ids = new Set(document.layers.map(layer => layer.id));
+  let index = document.layers.length + 1;
+  while (ids.has(`paint-layer-${index}`)) index++;
+  return `paint-layer-${index}`;
+}
+
+export function normalizeLayerName(name: string | undefined, fallback: string): string {
+  const trimmed = name?.trim() ?? '';
+  return trimmed || fallback;
+}
+
 export function cloneArtworkDocument(document: ArtworkDocument): ArtworkDocument {
   return {
     version: 2,
@@ -56,6 +70,49 @@ export function documentFromSnapshot(snapshot: ArtworkSnapshot): ArtworkDocument
 
 export function getActiveLayer(document: ArtworkDocument): ArtworkLayer | null {
   return document.layers.find(layer => layer.id === document.activeLayerId) ?? null;
+}
+
+export function createLayer(document: ArtworkDocument, name?: string, updatedAt = timestamp()): ArtworkLayer {
+  const id = uniqueLayerId(document);
+  const layer: ArtworkLayer = {
+    id,
+    name: normalizeLayerName(name, `Paint layer ${document.layers.length + 1}`),
+    visible: true,
+    locked: false,
+    marks: [],
+    createdAt: updatedAt,
+    updatedAt,
+  };
+  document.layers.push(layer);
+  document.activeLayerId = id;
+  document.updatedAt = updatedAt;
+  return layer;
+}
+
+export function selectLayer(document: ArtworkDocument, layerId: string, updatedAt = timestamp()): ArtworkLayer | null {
+  const layer = document.layers.find(item => item.id === layerId) ?? null;
+  if (!layer) return null;
+  document.activeLayerId = layerId;
+  document.updatedAt = updatedAt;
+  return layer;
+}
+
+export function renameLayer(document: ArtworkDocument, layerId: string, name: string, updatedAt = timestamp()): ArtworkLayer | null {
+  const layer = document.layers.find(item => item.id === layerId) ?? null;
+  if (!layer) return null;
+  layer.name = normalizeLayerName(name, layer.name || DEFAULT_LAYER_NAME);
+  layer.updatedAt = updatedAt;
+  document.updatedAt = updatedAt;
+  return layer;
+}
+
+export function setLayerLocked(document: ArtworkDocument, layerId: string, locked: boolean, updatedAt = timestamp()): ArtworkLayer | null {
+  const layer = document.layers.find(item => item.id === layerId) ?? null;
+  if (!layer) return null;
+  layer.locked = locked;
+  layer.updatedAt = updatedAt;
+  document.updatedAt = updatedAt;
+  return layer;
 }
 
 export function flattenVisibleMarks(document: ArtworkDocument): PaintMark[] {

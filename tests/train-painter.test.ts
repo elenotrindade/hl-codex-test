@@ -1,10 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createPaintMark, TEXTURES, TrainPainter, type ToolState } from '../src/train-painter';
 import { getScenario } from '../src/scenarios';
+import { documentFromSnapshot, type ArtworkDocument } from '../src/artwork-document';
 
 const tool: ToolState = { color: '#e2483d', texture: 'solid', brushSize: 0.025, opacity: 0.8, weight: 1 };
 
-function setup(initial = [] as ReturnType<typeof createPaintMark>[], windowProperties = {}, onHistory = vi.fn()) {
+function setup(initial: ReturnType<typeof createPaintMark>[] | ArtworkDocument = [], windowProperties = {}, onHistory = vi.fn()) {
   const context = Object.fromEntries(['scale', 'beginPath', 'rect', 'clip', 'save', 'restore', 'arc',
     'fill', 'stroke', 'moveTo', 'lineTo', 'closePath', 'translate', 'rotate', 'fillRect', 'clearRect']
     .map(name => [name, vi.fn()]));
@@ -281,5 +282,29 @@ describe('paint marks and stroke lifecycle', () => {
     expect(replay.onChange).not.toHaveBeenCalled();
     live.painter.destroy();
     replay.painter.destroy();
+  });
+
+  it('appends new strokes to the selected unlocked layer', () => {
+    const document = documentFromSnapshot({ marks: [createPaintMark({ x: 0.4, y: 0.5 }, tool)], updatedAt: '2026-09-17T12:00:00.000Z' });
+    const { painter, send, onChange } = setup(document);
+    painter.createLayer('Highlights');
+    send('pointerdown', { clientX: 600 });
+    send('pointerup', { clientX: 600 });
+    const saved = onChange.mock.lastCall![0] as ArtworkDocument;
+    expect(saved.layers[0].marks).toEqual([createPaintMark({ x: 0.4, y: 0.5 }, tool)]);
+    expect(saved.layers[1]).toMatchObject({ name: 'Highlights', marks: [createPaintMark({ x: 0.6, y: 0.5 }, tool)] });
+    painter.destroy();
+  });
+
+  it('rejects painting into locked active layers', () => {
+    const document = documentFromSnapshot({ marks: [], updatedAt: '2026-09-17T12:00:00.000Z' });
+    const { painter, send, onChange } = setup(document);
+    painter.setLayerLocked('paint-layer-1', true);
+    onChange.mockClear();
+    send('pointerdown');
+    send('pointerup');
+    expect(painter.getDocument().layers[0].marks).toEqual([]);
+    expect(onChange).not.toHaveBeenCalled();
+    painter.destroy();
   });
 });

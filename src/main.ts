@@ -60,6 +60,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
       </aside>
       <aside class="layers" aria-label="Artwork layers">
         <h2>03 / Layers</h2>
+        <button id="add-layer" type="button">New layer</button>
         <div id="layer-list" role="list" aria-label="Layer stack"></div>
         <p id="layer-status" role="status" aria-live="polite"></p>
       </aside>
@@ -111,13 +112,45 @@ function renderLayers(artwork: ArtworkDocument): void {
     row.dataset.layerId = layer.id;
     row.setAttribute('role', 'listitem');
     const active = layer.id === artwork.activeLayerId;
-    row.innerHTML = `<span>${layer.name}</span><span>${active ? 'Active' : 'Inactive'}</span>`;
+    const select = document.createElement('button');
+    select.type = 'button';
+    select.dataset.layerSelect = 'true';
+    select.textContent = active ? 'Active' : 'Select';
+    select.setAttribute('aria-pressed', String(active));
+    select.addEventListener('click', () => {
+      painter.setActiveLayer(layer.id);
+      syncLayerStatus(`${layer.name} is active.`);
+    });
+    const name = document.createElement('input');
+    name.dataset.layerName = 'true';
+    name.value = layer.name;
+    name.setAttribute('aria-label', 'Layer name');
+    name.addEventListener('change', () => {
+      painter.renameLayer(layer.id, name.value);
+      const renamed = painter.getDocument().layers.find(item => item.id === layer.id);
+      syncLayerStatus(`${renamed?.name ?? 'Layer'} renamed.`);
+    });
+    const lock = document.createElement('button');
+    lock.type = 'button';
+    lock.dataset.layerLock = 'true';
+    lock.textContent = layer.locked ? 'Locked' : 'Lock';
+    lock.setAttribute('aria-pressed', String(layer.locked));
+    lock.addEventListener('click', () => {
+      painter.setLayerLocked(layer.id, !layer.locked);
+      syncLayerStatus(`${layer.name} ${layer.locked ? 'unlocked' : 'locked'}.`);
+    });
+    row.append(select, name, lock);
     row.dataset.active = String(active);
+    row.dataset.locked = String(layer.locked);
     return row;
   }));
   const activeLayer = getActiveLayer(artwork);
   layerStatus.textContent = activeLayer ? `${activeLayer.name} is active.` : 'No active layer.';
   layerStatus.dataset.error = String(!activeLayer);
+}
+function syncLayerStatus(message: string, error = false): void {
+  layerStatus.textContent = message;
+  layerStatus.dataset.error = String(error);
 }
 function updateHistoryControls(state: { canUndo: boolean; canRedo: boolean }): void {
   undoButton.disabled = !state.canUndo;
@@ -144,6 +177,11 @@ const painter = new TrainPainter(canvas, tool, document => {
   cursor.style.setProperty('--cursor-opacity', String(state.opacity));
 }, updateHistoryControls);
 renderLayers(painter.getDocument());
+document.querySelector<HTMLButtonElement>('#add-layer')!.addEventListener('click', () => {
+  painter.createLayer();
+  const activeLayer = getActiveLayer(painter.getDocument());
+  syncLayerStatus(`${activeLayer?.name ?? 'New layer'} created and selected.`);
+});
 undoButton.addEventListener('click', () => painter.undo());
 redoButton.addEventListener('click', () => painter.redo());
 document.querySelector<HTMLButtonElement>('#clear-artwork')!.addEventListener('click', () => painter.clear());

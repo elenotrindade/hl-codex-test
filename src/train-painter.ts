@@ -1,6 +1,6 @@
 import { getScenario, isInsidePaintableArea, type PaintScenario } from './scenarios';
 import { type Point } from './train-template';
-import { cloneArtworkDocument, createDefaultArtworkDocument, flattenVisibleMarks, getActiveLayer, touchDocument, type ArtworkDocument } from './artwork-document';
+import { cloneArtworkDocument, createDefaultArtworkDocument, createLayer as addDocumentLayer, flattenVisibleMarks, getActiveLayer, renameLayer as renameDocumentLayer, selectLayer, setLayerLocked as setDocumentLayerLocked, touchDocument, type ArtworkDocument } from './artwork-document';
 
 export const TEXTURES = ['solid', 'spray', 'marker'] as const;
 export type TextureId = typeof TEXTURES[number];
@@ -99,6 +99,30 @@ export class TrainPainter {
   getMarks(): PaintMark[] { return flattenVisibleMarks(this.document); }
 
   getDocument(): ArtworkDocument { return cloneArtworkDocument(this.document); }
+
+  setActiveLayer(layerId: string): void {
+    this.cancel();
+    if (!selectLayer(this.document, layerId)) return;
+    this.emitChange(false);
+  }
+
+  createLayer(name?: string): void {
+    this.cancel();
+    addDocumentLayer(this.document, name);
+    this.emitChange(false);
+  }
+
+  renameLayer(layerId: string, name: string): void {
+    this.cancel();
+    if (!renameDocumentLayer(this.document, layerId, name)) return;
+    this.emitChange(false);
+  }
+
+  setLayerLocked(layerId: string, locked: boolean): void {
+    this.cancel();
+    if (!setDocumentLayerLocked(this.document, layerId, locked)) return;
+    this.emitChange(false);
+  }
 
   canUndo(): boolean { return this.undoStack.length > 0; }
 
@@ -244,9 +268,9 @@ export class TrainPainter {
     this.resize(true);
   }
 
-  private emitChange(): void {
+  private emitChange(touch = true): void {
     this.notifyHistoryChange();
-    touchDocument(this.document);
+    if (touch) touchDocument(this.document);
     this.onChange(this.emitLegacyMarks ? this.getMarks() : this.getDocument());
   }
 
