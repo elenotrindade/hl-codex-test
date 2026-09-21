@@ -17,23 +17,15 @@ let activeScenario: PaintScenario = getScenario('train');
 document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   <a class="skip-link" href="#workshop">Skip to the workshop</a>
   <main>
-    <div class="yard-strip">YARD / OPEN CANVAS / NO. 001</div>
-    <header>
-      <h1>Leave your <em>mark.</em></h1>
-      <p>Pick a real street surface. Dial in a fresh paint mix, then drag directly over the photo-lit panel.</p>
-    </header>
-    <section id="workshop" class="workshop" aria-label="Street painting workshop" tabindex="-1">
-      <div class="stage-panel">
-        <div class="stage-heading"><h2>01 / Make it yours</h2><span id="scenario-stamp">TRAIN</span></div>
-        <div class="scenario-tabs" role="group" aria-label="Street scenario">
-          ${scenarios.map(scenario => `<button type="button" data-scenario="${scenario.id}" aria-pressed="${scenario.id === activeScenario.id}">${scenario.label}</button>`).join('')}
-        </div>
-        <div class="paint-stage" aria-live="polite">${activeScenario.template()}<canvas aria-label="${activeScenario.ariaLabel}" aria-describedby="paint-help">Canvas support is required to paint.</canvas><div class="brush-cursor" aria-hidden="true"></div></div>
-        <p id="paint-help">Drag with a mouse, pen, or finger. Paint stays inside the active street surface.</p>
-        <p class="stage-stamp" aria-hidden="true">YOUR CITY. YOUR COLORS.</p>
-      </div>
-      <aside class="tools" aria-label="Painting tools">
-        <h2>02 / Pick your paint</h2>
+    <div class="yard-strip">
+      <span>YARD / OPEN CANVAS / NO. 001</span>
+      <label for="scenario-select">Canvas
+        <select id="scenario-select" aria-describedby="scenario-select-help">
+          ${scenarios.map(scenario => `<option value="${scenario.id}"${scenario.id === activeScenario.id ? ' selected' : ''}>${scenario.label}</option>`).join('')}
+        </select>
+      </label>
+      <span id="scenario-select-help">Changing canvas clears the current artwork after confirmation.</span>
+      <div class="top-toolstrip" role="group" aria-label="Primary painting tools">
         <div class="color-wheel" role="group" aria-labelledby="color-wheel-label" aria-describedby="color-wheel-help">
           <p id="color-wheel-label" class="tool-label">Color mixer</p>
           <button type="button" class="color-wheel__surface" aria-label="Choose paint color from wheel" aria-describedby="color-wheel-help">
@@ -45,12 +37,10 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
           </div>
           <p id="color-wheel-help" class="tool-note">Drag the wheel or use arrow keys to tune the paint.</p>
         </div>
-        <label for="brush-size">Brush size <output id="size-value" for="brush-size">25</output></label>
-        <input id="brush-size" type="range" min="6" max="60" value="25" aria-valuetext="25 train units" />
-        <label for="brush-opacity">Opacity <output id="opacity-value" for="brush-opacity">90%</output></label>
-        <input id="brush-opacity" type="range" min="5" max="100" value="90" aria-valuetext="90 percent" />
-        <label for="brush-weight">Brush weight <output id="weight-value" for="brush-weight">1.0x</output></label>
-        <input id="brush-weight" type="range" min="50" max="200" value="100" aria-valuetext="1.0 times pressure" />
+        <div class="top-toolstrip__control top-toolstrip__size">
+          <label for="brush-size">Brush size <output id="size-value" for="brush-size">25</output></label>
+          <input id="brush-size" type="range" min="6" max="60" value="25" aria-valuetext="25 train units" />
+        </div>
         <div class="textures" role="group" aria-label="Paint texture">
           ${TEXTURES.map(texture => `<button type="button" data-texture="${texture}" aria-pressed="${texture === 'solid'}">${texture}</button>`).join('')}
         </div>
@@ -59,17 +49,35 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
           <button type="button" id="redo-stroke" disabled aria-disabled="true">Redo stroke</button>
         </div>
         <button type="button" id="clear-artwork" aria-describedby="clear-help">Clear artwork</button>
+      </div>
+    </div>
+    <header>
+      <h1>Leave your <em>mark.</em></h1>
+      <p>Pick a real street surface. Dial in a fresh paint mix, then drag directly over the photo-lit panel.</p>
+    </header>
+    <section id="workshop" class="workshop" aria-label="Street painting workshop" tabindex="-1">
+      <div class="stage-panel">
+        <div class="stage-heading"><h2>01 / Make it yours</h2><span id="scenario-stamp">TRAIN</span></div>
+        <div class="paint-stage" aria-live="polite">${activeScenario.template()}<canvas aria-label="${activeScenario.ariaLabel}" aria-describedby="paint-help">Canvas support is required to paint.</canvas><div class="brush-cursor" aria-hidden="true"></div></div>
+        <p id="paint-help">Drag with a mouse, pen, or finger. Paint stays inside the active street surface.</p>
+        <p class="stage-stamp" aria-hidden="true">YOUR CITY. YOUR COLORS.</p>
+      </div>
+      <aside class="tools" aria-label="Painting status and secondary controls">
+        <h2>02 / Paint details</h2>
+        <label for="brush-opacity">Opacity <output id="opacity-value" for="brush-opacity">90%</output></label>
+        <input id="brush-opacity" type="range" min="5" max="100" value="90" aria-valuetext="90 percent" />
+        <label for="brush-weight">Brush weight <output id="weight-value" for="brush-weight">1.0x</output></label>
+        <input id="brush-weight" type="range" min="50" max="200" value="100" aria-valuetext="1.0 times pressure" />
         <p id="clear-help" class="tool-note">Undo and redo work by complete stroke. Clear removes all paint.</p>
+        <div class="layer-panel" aria-labelledby="layers-heading">
+          <div class="layer-panel__heading"><h3 id="layers-heading">Layers</h3><button type="button" id="add-layer">Add layer</button></div>
+          <ol id="layer-list" class="layer-list"></ol>
+          <p id="layer-status" role="status" aria-live="polite"></p>
+        </div>
         <p id="save-status" role="status" aria-live="polite"></p>
       </aside>
-      <aside class="layers" aria-label="Artwork layers">
-        <h2>03 / Layers</h2>
-        <button id="add-layer" type="button">New layer</button>
-        <div id="layer-list" role="list" aria-label="Layer stack"></div>
-        <p id="layer-status" role="status" aria-live="polite"></p>
-      </aside>
     <section class="display-panel" aria-labelledby="display-heading">
-      <h2 id="display-heading">04 / On display</h2>
+      <h2 id="display-heading">03 / On display</h2>
       <p>A local display rack. Submissions and votes stay in this browser only. Nothing is uploaded.</p>
       <label for="artwork-title">Artwork name <span>optional</span></label>
       <input id="artwork-title" type="text" maxlength="80" placeholder="Midnight layup" autocomplete="off" />
@@ -159,25 +167,32 @@ document.querySelector<HTMLButtonElement>('#add-layer')!.addEventListener('click
 undoButton.addEventListener('click', () => painter.undo());
 redoButton.addEventListener('click', () => painter.redo());
 document.querySelector<HTMLButtonElement>('#clear-artwork')!.addEventListener('click', () => painter.clear());
-document.querySelectorAll<HTMLButtonElement>('[data-scenario]').forEach(button => {
-  button.addEventListener('click', () => {
-    activeScenario = getScenario(button.dataset.scenario as typeof activeScenario.id);
-    document.querySelectorAll<HTMLButtonElement>('[data-scenario]').forEach(tab => tab.setAttribute('aria-pressed', String(tab === button)));
-    document.querySelector<HTMLSpanElement>('#scenario-stamp')!.textContent = activeScenario.label.toUpperCase();
-    const stage = document.querySelector<HTMLDivElement>('.paint-stage')!;
-    const currentCanvas = stage.querySelector('canvas')!;
-    stage.innerHTML = `${activeScenario.template()}`;
-    stage.append(currentCanvas);
-    stage.append(cursor);
-    currentCanvas.setAttribute('aria-label', activeScenario.ariaLabel);
-    const scenarioSaved = loadArtworkDocument(undefined, activeScenario);
-    painter.setScenario(activeScenario, scenarioSaved.document ?? createDefaultArtworkDocument());
-    renderLayers(painter.getDocument());
-    status.textContent = scenarioSaved.status === 'loaded'
-      ? `${activeScenario.label} artwork restored.`
-      : `Ready to paint the ${activeScenario.label.toLowerCase()}.`;
-    status.dataset.error = 'false';
-  });
+const scenarioSelect = document.querySelector<HTMLSelectElement>('#scenario-select')!;
+scenarioSelect.addEventListener('change', () => {
+  const nextScenario = getScenario(scenarioSelect.value as typeof activeScenario.id);
+  if (nextScenario.id === activeScenario.id) return;
+  const hasArtwork = painter.getDocument().layers.some(layer => layer.marks.length > 0);
+  if (hasArtwork && !window.confirm(`Change to the ${nextScenario.label.toLowerCase()} canvas? Your current artwork will be cleared.`)) {
+    scenarioSelect.value = activeScenario.id;
+    return;
+  }
+
+  activeScenario = nextScenario;
+  document.querySelector<HTMLSpanElement>('#scenario-stamp')!.textContent = activeScenario.label.toUpperCase();
+  const stage = document.querySelector<HTMLDivElement>('.paint-stage')!;
+  const currentCanvas = stage.querySelector('canvas')!;
+  stage.innerHTML = `${activeScenario.template()}`;
+  stage.append(currentCanvas);
+  stage.append(cursor);
+  currentCanvas.setAttribute('aria-label', activeScenario.ariaLabel);
+  const blank = createDefaultArtworkDocument();
+  painter.setScenario(activeScenario, blank);
+  renderLayers(painter.getDocument());
+  const success = saveArtwork(blank, undefined, activeScenario);
+  status.textContent = success
+    ? `${activeScenario.label} canvas ready. Previous artwork cleared.`
+    : `Ready to paint the ${activeScenario.label.toLowerCase()}, but the blank scene could not be saved.`;
+  status.dataset.error = String(!success);
 });
 document.querySelectorAll<HTMLButtonElement>('[data-texture]').forEach(button => {
   button.addEventListener('click', () => {

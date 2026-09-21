@@ -1,4 +1,5 @@
 import { getActiveLayer, type ArtworkDocument } from './artwork-document';
+import { createLayerPreview } from './layer-preview';
 
 export type LayerPanelHandlers = {
   select(layerId: string): void;
@@ -16,11 +17,41 @@ export function syncLayerStatus(layerStatus: HTMLElement, message: string, error
 }
 
 export function renderLayerPanel(artwork: ArtworkDocument, layerList: HTMLElement, layerStatus: HTMLElement, handlers: LayerPanelHandlers): void {
+  let draggedLayerId: string | null = null;
   layerList.replaceChildren(...[...artwork.layers].reverse().map((layer, visualIndex) => {
     const row = document.createElement('article');
     row.className = 'layer-row';
     row.dataset.layerId = layer.id;
     row.setAttribute('role', 'listitem');
+    row.draggable = artwork.layers.length > 1;
+    row.addEventListener('dragstart', event => {
+      draggedLayerId = layer.id;
+      row.dataset.dragging = 'true';
+      event.dataTransfer?.setData('text/plain', layer.id);
+      if (event.dataTransfer) event.dataTransfer.effectAllowed = 'move';
+    });
+    row.addEventListener('dragover', event => {
+      if (!draggedLayerId || draggedLayerId === layer.id) return;
+      event.preventDefault();
+      row.dataset.dropTarget = 'true';
+      if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
+    });
+    row.addEventListener('dragleave', () => { delete row.dataset.dropTarget; });
+    row.addEventListener('drop', event => {
+      event.preventDefault();
+      delete row.dataset.dropTarget;
+      if (!draggedLayerId || draggedLayerId === layer.id) return;
+      const draggedIndex = artwork.layers.findIndex(item => item.id === draggedLayerId);
+      const targetIndex = artwork.layers.findIndex(item => item.id === layer.id);
+      if (draggedIndex < 0 || targetIndex < 0) return;
+      const direction = targetIndex > draggedIndex ? 'up' : 'down';
+      for (let index = draggedIndex; index !== targetIndex; index += direction === 'up' ? 1 : -1) handlers.move(draggedLayerId, direction);
+    });
+    row.addEventListener('dragend', () => {
+      draggedLayerId = null;
+      delete row.dataset.dragging;
+      delete row.dataset.dropTarget;
+    });
     const active = layer.id === artwork.activeLayerId;
     const stackNumber = document.createElement('span');
     stackNumber.className = 'layer-row__number';
@@ -32,7 +63,11 @@ export function renderLayerPanel(artwork: ArtworkDocument, layerList: HTMLElemen
     const select = document.createElement('button');
     select.type = 'button';
     select.dataset.layerSelect = 'true';
-    select.textContent = active ? 'Active' : 'Select';
+    const preview = createLayerPreview(layer.marks);
+    const selectLabel = document.createElement('span');
+    selectLabel.className = 'layer-select__label';
+    selectLabel.textContent = active ? 'Active' : 'Select';
+    select.append(preview, selectLabel);
     select.setAttribute('aria-label', `${active ? 'Active layer' : 'Select layer'} ${layer.name}`);
     select.setAttribute('aria-pressed', String(active));
     select.addEventListener('click', () => handlers.select(layer.id));
