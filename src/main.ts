@@ -1,18 +1,13 @@
 import './styles.css';
 import { TrainPainter, TEXTURES, type TextureId, type ToolState } from './train-painter';
 import { loadArtwork, saveArtwork, loadGallery, saveGallery } from './storage';
+import { DEFAULT_COLOR, colorFromWheelPoint, moveWheelSelection, type WheelMoveDirection, type WheelSelection } from './paint-tools';
 import { seededGallery, publishArtwork, upvote, rankGallery, getRecentGallery, type GalleryEntry } from './gallery';
 import { getScenario, scenarios, type PaintScenario } from './scenarios';
-import { formatHexColor, hsvToRgb, parseHexColor, rgbToHsv, type HsvColor, type RgbColor } from './color-tools';
 import { openDialog } from './dialogs';
 import { exportTrainImage, type ExportAction, type ExportOutcome } from './artwork-export';
 
-const colors = [
-  ['Signal red', '#e2483d'], ['Amber', '#f1aa2d'], ['Chalk', '#fff4db'],
-  ['Ink', '#171513'], ['Electric blue', '#2588ed'], ['Mint', '#72d6ae'],
-] as const;
-const tool: ToolState = { color: colors[0][1], texture: 'solid', brushSize: 0.025, opacity: 0.9, weight: 1 };
-let hsv: HsvColor = rgbToHsv(parseHexColor(tool.color)!);
+const tool: ToolState = { color: DEFAULT_COLOR, texture: 'solid', brushSize: 0.025, opacity: 0.9, weight: 1 };
 let activeScenario: PaintScenario = getScenario('train');
 document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   <a class="skip-link" href="#workshop">Skip to the workshop</a>
@@ -20,6 +15,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
     <div class="yard-strip">YARD / OPEN CANVAS / NO. 001</div>
     <header>
       <h1>Leave your <em>mark.</em></h1>
+      <p>Pick a real street surface. Dial in a fresh paint mix, then drag directly over the photo-lit panel.</p>
     </header>
     <section id="workshop" class="workshop" aria-label="Street painting workshop" tabindex="-1">
       <div class="stage-panel">
@@ -33,19 +29,16 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
       </div>
       <aside class="tools" aria-label="Painting tools">
         <h2>02 / Pick your paint</h2>
-        <div class="color-picker" aria-label="Custom paint color">
-          <div class="selected-color" style="--selected:${tool.color}; --selected-alpha:${tool.opacity}"><span>Selected paint</span><strong id="color-readout">${tool.color}</strong></div>
-          <label for="hue-control">Hue <output id="hue-value" for="hue-control">${hsv.h}</output></label>
-          <input id="hue-control" type="range" min="0" max="360" value="${hsv.h}" aria-valuetext="${hsv.h} degrees" />
-          <label for="saturation-control">Saturation <output id="saturation-value" for="saturation-control">${hsv.s}</output></label>
-          <input id="saturation-control" type="range" min="0" max="100" value="${hsv.s}" aria-valuetext="${hsv.s} percent" />
-          <label for="value-control">Value <output id="value-value" for="value-control">${hsv.v}</output></label>
-          <input id="value-control" type="range" min="0" max="100" value="${hsv.v}" aria-valuetext="${hsv.v} percent" />
-          <label for="hex-color">HEX</label><input id="hex-color" type="text" value="${tool.color}" maxlength="7" spellcheck="false" />
-          <div class="rgb-fields"><label for="red-value">R <input id="red-value" type="number" min="0" max="255" value="${parseHexColor(tool.color)!.r}" /></label><label for="green-value">G <input id="green-value" type="number" min="0" max="255" value="${parseHexColor(tool.color)!.g}" /></label><label for="blue-value">B <input id="blue-value" type="number" min="0" max="255" value="${parseHexColor(tool.color)!.b}" /></label></div>
-        </div>
-        <div class="swatches" role="group" aria-label="Paint color">
-          ${colors.map(([name, color], i) => `<button type="button" class="swatch" style="--swatch:${color}" data-color="${color}" aria-label="${name}" aria-pressed="${i === 0}" title="${name}"></button>`).join('')}
+        <div class="color-wheel" role="group" aria-labelledby="color-wheel-label" aria-describedby="color-wheel-help">
+          <p id="color-wheel-label" class="tool-label">Color mixer</p>
+          <button type="button" class="color-wheel__surface" aria-label="Choose paint color from wheel" aria-describedby="color-wheel-help">
+            <span class="color-wheel__handle" aria-hidden="true"></span>
+          </button>
+          <div class="selected-color">
+            <span class="selected-color__chip" aria-hidden="true"></span>
+            <span id="selected-color-text">Selected color ${DEFAULT_COLOR}</span>
+          </div>
+          <p id="color-wheel-help" class="tool-note">Drag the wheel or use arrow keys to tune the paint.</p>
         </div>
         <label for="brush-size">Brush size <output id="size-value" for="brush-size">25</output></label>
         <input id="brush-size" type="range" min="6" max="60" value="25" aria-valuetext="25 train units" />
@@ -72,7 +65,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
       <button type="button" id="publish-artwork">Put on display</button>
       <p id="gallery-status" role="status" aria-live="polite"></p>
       <div class="export-actions" aria-labelledby="export-heading">
-        <h3 id="export-heading">Save or share your current train</h3>
+        <h3 id="export-heading">Save or share your current scene</h3>
         <p>Download a PNG, or use your browser's share sheet where file sharing is supported.</p>
         <button type="button" id="download-artwork">Download PNG</button>
         <button type="button" id="share-artwork">Share image</button>
@@ -153,45 +146,63 @@ document.querySelectorAll<HTMLButtonElement>('[data-texture]').forEach(button =>
     document.querySelectorAll('[data-texture]').forEach(chip => chip.setAttribute('aria-pressed', String(chip === button)));
   });
 });
-function applyColor(rgb: RgbColor, updateHsv = true): void {
-  const color = formatHexColor(rgb);
-  tool.color = color;
-  if (updateHsv) hsv = rgbToHsv(rgb);
+const colorWheel = document.querySelector<HTMLButtonElement>('.color-wheel__surface')!;
+const colorHandle = document.querySelector<HTMLSpanElement>('.color-wheel__handle')!;
+const colorChip = document.querySelector<HTMLSpanElement>('.selected-color__chip')!;
+const selectedColorText = document.querySelector<HTMLSpanElement>('#selected-color-text')!;
+let currentSelection = colorFromWheelPoint(1, 0);
+
+function updateSelectedColor(selection: WheelSelection): void {
+  currentSelection = selection;
+  tool.color = selection.color;
   painter.setTool(tool);
-  document.querySelector<HTMLDivElement>('.selected-color')!.style.setProperty('--selected', color);
-  document.querySelector<HTMLElement>('#color-readout')!.textContent = color;
-  document.querySelector<HTMLInputElement>('#hex-color')!.value = color;
-  const parsed = parseHexColor(color)!;
-  document.querySelector<HTMLInputElement>('#red-value')!.value = String(parsed.r);
-  document.querySelector<HTMLInputElement>('#green-value')!.value = String(parsed.g);
-  document.querySelector<HTMLInputElement>('#blue-value')!.value = String(parsed.b);
-  document.querySelector<HTMLInputElement>('#hue-control')!.value = String(hsv.h);
-  document.querySelector<HTMLInputElement>('#saturation-control')!.value = String(hsv.s);
-  document.querySelector<HTMLInputElement>('#value-control')!.value = String(hsv.v);
-  document.querySelector<HTMLOutputElement>('#hue-value')!.value = String(hsv.h);
-  document.querySelector<HTMLOutputElement>('#saturation-value')!.value = String(hsv.s);
-  document.querySelector<HTMLOutputElement>('#value-value')!.value = String(hsv.v);
-  document.querySelectorAll('[data-color]').forEach(swatch => swatch.setAttribute('aria-pressed', String((swatch as HTMLButtonElement).dataset.color === color)));
+  colorWheel.style.setProperty('--selected-color', selection.color);
+  colorWheel.style.setProperty('--handle-x', `${(selection.x + 1) * 50}%`);
+  colorWheel.style.setProperty('--handle-y', `${(selection.y + 1) * 50}%`);
+  colorChip.style.background = selection.color;
+  selectedColorText.textContent = `Selected color ${selection.color}`;
+  colorWheel.setAttribute('aria-label', `Choose paint color from wheel. ${selection.color} selected.`);
 }
-(['h', 's', 'v'] as const).forEach((channel, index) => {
-  const ids = ['#hue-control', '#saturation-control', '#value-control'] as const;
-  document.querySelector<HTMLInputElement>(ids[index])!.addEventListener('input', event => {
-    hsv = { ...hsv, [channel]: (event.target as HTMLInputElement).valueAsNumber };
-    applyColor(hsvToRgb(hsv), false);
-  });
+
+function selectionFromPointer(event: PointerEvent): WheelSelection {
+  const rect = colorWheel.getBoundingClientRect();
+  return colorFromWheelPoint(
+    ((event.clientX - rect.left) / rect.width) * 2 - 1,
+    ((event.clientY - rect.top) / rect.height) * 2 - 1,
+  );
+}
+
+colorWheel.addEventListener('pointerdown', event => {
+  colorWheel.setPointerCapture(event.pointerId);
+  colorWheel.dataset.dragging = 'true';
+  updateSelectedColor(selectionFromPointer(event));
 });
-document.querySelector<HTMLInputElement>('#hex-color')!.addEventListener('change', event => {
-  const rgb = parseHexColor((event.target as HTMLInputElement).value);
-  if (rgb) applyColor(rgb);
+colorWheel.addEventListener('pointermove', event => {
+  if (!colorWheel.hasPointerCapture(event.pointerId)) return;
+  updateSelectedColor(selectionFromPointer(event));
 });
-document.querySelectorAll<HTMLInputElement>('#red-value, #green-value, #blue-value').forEach(input => input.addEventListener('change', () => {
-  applyColor({ r: document.querySelector<HTMLInputElement>('#red-value')!.valueAsNumber, g: document.querySelector<HTMLInputElement>('#green-value')!.valueAsNumber, b: document.querySelector<HTMLInputElement>('#blue-value')!.valueAsNumber });
-}));
-document.querySelectorAll<HTMLButtonElement>('[data-color]').forEach(button => {
-  button.addEventListener('click', () => {
-    applyColor(parseHexColor(button.dataset.color!)!);
-  });
+colorWheel.addEventListener('pointerup', event => {
+  if (colorWheel.hasPointerCapture(event.pointerId)) colorWheel.releasePointerCapture(event.pointerId);
+  delete colorWheel.dataset.dragging;
 });
+colorWheel.addEventListener('pointercancel', event => {
+  if (colorWheel.hasPointerCapture(event.pointerId)) colorWheel.releasePointerCapture(event.pointerId);
+  delete colorWheel.dataset.dragging;
+});
+colorWheel.addEventListener('keydown', event => {
+  const directionByKey: Partial<Record<string, WheelMoveDirection>> = {
+    ArrowUp: 'up',
+    ArrowDown: 'down',
+    ArrowLeft: 'left',
+    ArrowRight: 'right',
+  };
+  const direction = directionByKey[event.key];
+  if (!direction) return;
+
+  event.preventDefault();
+  updateSelectedColor(moveWheelSelection(currentSelection, direction));
+});
+updateSelectedColor(currentSelection);
 document.querySelector<HTMLInputElement>('#brush-size')!.addEventListener('input', event => {
   const value = (event.target as HTMLInputElement).valueAsNumber;
   tool.brushSize = value / 1000;
@@ -205,7 +216,6 @@ document.querySelector<HTMLInputElement>('#brush-opacity')!.addEventListener('in
   painter.setTool(tool);
   document.querySelector<HTMLOutputElement>('#opacity-value')!.value = `${value}%`;
   (event.target as HTMLInputElement).setAttribute('aria-valuetext', `${value} percent`);
-  document.querySelector<HTMLDivElement>('.selected-color')!.style.setProperty('--selected-alpha', String(tool.opacity));
 });
 document.querySelector<HTMLInputElement>('#brush-weight')!.addEventListener('input', event => {
   const value = (event.target as HTMLInputElement).valueAsNumber / 100;
@@ -313,7 +323,7 @@ function exportMessage(outcome: ExportOutcome): string {
   if (outcome.status === 'shared') return `${outcome.filename} handed to your browser's share sheet. YARD cannot confirm it was posted.`;
   if (outcome.status === 'cancelled') return `Share cancelled. ${outcome.filename} was not posted by YARD.`;
   if (outcome.status === 'unsupported') return `This browser cannot share image files from YARD. Use Download PNG instead.`;
-  return `Could not export the train snapshot: ${outcome.message}`;
+  return `Could not export the scene snapshot: ${outcome.message}`;
 }
 
 async function exportCurrentTrain(action: ExportAction): Promise<void> {
@@ -322,14 +332,14 @@ async function exportCurrentTrain(action: ExportAction): Promise<void> {
   download.setAttribute('aria-busy', 'true');
   share.setAttribute('aria-busy', 'true');
   exportStatus.dataset.error = 'false';
-  exportStatus.textContent = 'Preparing your train snapshot...';
+  exportStatus.textContent = `Preparing your ${activeScenario.label.toLowerCase()} snapshot...`;
   try {
     const image = await painter.createSnapshot();
     const outcome = await exportTrainImage(image, action);
     exportStatus.textContent = exportMessage(outcome);
     exportStatus.dataset.error = String(outcome.status === 'failed');
   } catch {
-    exportStatus.textContent = 'Could not create the train snapshot. Nothing was downloaded or shared; please try again.';
+    exportStatus.textContent = `Could not create the ${activeScenario.label.toLowerCase()} snapshot. Nothing was downloaded or shared; please try again.`;
     exportStatus.dataset.error = 'true';
   } finally {
     download.disabled = false;

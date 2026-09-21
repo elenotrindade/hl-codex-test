@@ -94,7 +94,7 @@ describe('gallery snapshots', () => {
     const result = painter.createSnapshot();
     expect(overlayContext.drawImage).toHaveBeenCalledWith(canvas, 0, 0, 1000, 400);
     expect(outputContext.drawImage).not.toHaveBeenCalled();
-    expect(decodeURIComponent(train!.src)).toContain('width="1000" height="400"');
+    expect(train!.src).toBe('/references/train-cart.png');
     painter.clear();
     train!.onload();
     expect(await result).toBe('data:image/png;base64,YQ==');
@@ -123,7 +123,7 @@ describe('scenario-driven painting', () => {
     const { painter, context, send, onChange } = setup();
     context.rect.mockClear();
     painter.setScenario(getScenario('wall'));
-    expect(context.rect).toHaveBeenCalledWith(80, 88, 840, 200);
+    expect(context.rect).toHaveBeenCalledWith(35, 72, 930, 224.00000000000003);
     send('pointerdown', { clientX: 500, clientY: 110 });
     send('pointerup');
     expect(onChange).toHaveBeenCalledWith([createPaintMark({ x: 0.5, y: 0.275 }, tool)]);
@@ -145,7 +145,7 @@ describe('scenario-driven painting', () => {
     let image: { onload: () => void; src: string };
     vi.stubGlobal('Image', class { constructor() { image = this as unknown as typeof image; } });
     const result = painter.createSnapshot();
-    expect(decodeURIComponent(image!.src)).toContain('Boxy street van');
+    expect(image!.src).toBe('/references/car.png');
     image!.onload();
     await expect(result).resolves.toBe('data:image/png;base64,Yg==');
     expect(outputContext.fillStyle).toBe('#d7d0be');
