@@ -7,6 +7,7 @@ import { seededGallery, publishArtwork, upvote, rankGallery, getRecentGallery, t
 import { getScenario, scenarios, type PaintScenario } from './scenarios';
 import { openDialog } from './dialogs';
 import { exportTrainImage, type ExportAction, type ExportOutcome } from './artwork-export';
+import { renderLayerPanel, syncLayerStatus } from './layer-panel';
 
 const tool: ToolState = { color: DEFAULT_COLOR, texture: 'solid', brushSize: 0.025, opacity: 0.9, weight: 1 };
 let activeScenario: PaintScenario = getScenario('train');
@@ -106,85 +107,15 @@ status.textContent = {
 }[saved.status];
 status.dataset.error = String(saved.status === 'invalid' || saved.status === 'unavailable');
 function renderLayers(artwork: ArtworkDocument): void {
-  layerList.replaceChildren(...[...artwork.layers].reverse().map(layer => {
-    const row = document.createElement('article');
-    row.className = 'layer-row';
-    row.dataset.layerId = layer.id;
-    row.setAttribute('role', 'listitem');
-    const active = layer.id === artwork.activeLayerId;
-    const select = document.createElement('button');
-    select.type = 'button';
-    select.dataset.layerSelect = 'true';
-    select.textContent = active ? 'Active' : 'Select';
-    select.setAttribute('aria-pressed', String(active));
-    select.addEventListener('click', () => {
-      painter.setActiveLayer(layer.id);
-      syncLayerStatus(`${layer.name} is active.`);
-    });
-    const name = document.createElement('input');
-    name.dataset.layerName = 'true';
-    name.value = layer.name;
-    name.setAttribute('aria-label', 'Layer name');
-    name.addEventListener('change', () => {
-      painter.renameLayer(layer.id, name.value);
-      const renamed = painter.getDocument().layers.find(item => item.id === layer.id);
-      syncLayerStatus(`${renamed?.name ?? 'Layer'} renamed.`);
-    });
-    const lock = document.createElement('button');
-    lock.type = 'button';
-    lock.dataset.layerLock = 'true';
-    lock.textContent = layer.locked ? 'Locked' : 'Lock';
-    lock.setAttribute('aria-pressed', String(layer.locked));
-    lock.addEventListener('click', () => {
-      painter.setLayerLocked(layer.id, !layer.locked);
-      syncLayerStatus(`${layer.name} ${layer.locked ? 'unlocked' : 'locked'}.`);
-    });
-    const visible = document.createElement('button');
-    visible.type = 'button';
-    visible.dataset.layerVisible = 'true';
-    visible.textContent = layer.visible ? 'Visible' : 'Hidden';
-    visible.setAttribute('aria-pressed', String(layer.visible));
-    visible.addEventListener('click', () => {
-      painter.setLayerVisible(layer.id, !layer.visible);
-      syncLayerStatus(`${layer.name} ${layer.visible ? 'hidden' : 'visible'}.`);
-    });
-    const up = document.createElement('button');
-    up.type = 'button';
-    up.dataset.layerUp = 'true';
-    up.textContent = 'Move up';
-    up.addEventListener('click', () => { painter.moveLayer(layer.id, 'up'); syncLayerStatus(`${layer.name} moved up.`); });
-    const down = document.createElement('button');
-    down.type = 'button';
-    down.dataset.layerDown = 'true';
-    down.textContent = 'Move down';
-    down.addEventListener('click', () => { painter.moveLayer(layer.id, 'down'); syncLayerStatus(`${layer.name} moved down.`); });
-    const duplicate = document.createElement('button');
-    duplicate.type = 'button';
-    duplicate.dataset.layerDuplicate = 'true';
-    duplicate.textContent = 'Duplicate';
-    duplicate.addEventListener('click', () => { painter.duplicateLayer(layer.id); syncLayerStatus(`${layer.name} duplicated.`); });
-    const remove = document.createElement('button');
-    remove.type = 'button';
-    remove.dataset.layerDelete = 'true';
-    remove.textContent = 'Delete';
-    remove.addEventListener('click', () => { painter.deleteLayer(layer.id); syncLayerStatus(`${layer.name} deleted.`); });
-    const index = artwork.layers.findIndex(item => item.id === layer.id);
-    up.disabled = index === artwork.layers.length - 1;
-    down.disabled = index === 0;
-    remove.disabled = artwork.layers.length === 1;
-    row.append(select, name, visible, lock, up, down, duplicate, remove);
-    row.dataset.active = String(active);
-    row.dataset.locked = String(layer.locked);
-    row.dataset.visible = String(layer.visible);
-    return row;
-  }));
-  const activeLayer = getActiveLayer(artwork);
-  layerStatus.textContent = activeLayer ? `${activeLayer.name} is active.` : 'No active layer.';
-  layerStatus.dataset.error = String(!activeLayer);
-}
-function syncLayerStatus(message: string, error = false): void {
-  layerStatus.textContent = message;
-  layerStatus.dataset.error = String(error);
+  renderLayerPanel(artwork, layerList, layerStatus, {
+    select: layerId => { painter.setActiveLayer(layerId); syncLayerStatus(layerStatus, `${painter.getDocument().layers.find(layer => layer.id === layerId)?.name ?? 'Layer'} is active.`); },
+    rename: (layerId, name) => { painter.renameLayer(layerId, name); syncLayerStatus(layerStatus, `${painter.getDocument().layers.find(layer => layer.id === layerId)?.name ?? 'Layer'} renamed.`); },
+    lock: (layerId, locked) => { painter.setLayerLocked(layerId, locked); syncLayerStatus(layerStatus, `${painter.getDocument().layers.find(layer => layer.id === layerId)?.name ?? 'Layer'} ${locked ? 'locked' : 'unlocked'}.`); },
+    visible: (layerId, visible) => { painter.setLayerVisible(layerId, visible); syncLayerStatus(layerStatus, `${painter.getDocument().layers.find(layer => layer.id === layerId)?.name ?? 'Layer'} ${visible ? 'visible' : 'hidden'}.`); },
+    move: (layerId, direction) => { painter.moveLayer(layerId, direction); syncLayerStatus(layerStatus, `${painter.getDocument().layers.find(layer => layer.id === layerId)?.name ?? 'Layer'} moved ${direction}.`); },
+    duplicate: layerId => { const name = painter.getDocument().layers.find(layer => layer.id === layerId)?.name ?? 'Layer'; painter.duplicateLayer(layerId); syncLayerStatus(layerStatus, `${name} duplicated.`); },
+    delete: layerId => { const name = painter.getDocument().layers.find(layer => layer.id === layerId)?.name ?? 'Layer'; painter.deleteLayer(layerId); syncLayerStatus(layerStatus, `${name} deleted.`); },
+  });
 }
 function updateHistoryControls(state: { canUndo: boolean; canRedo: boolean }): void {
   undoButton.disabled = !state.canUndo;
@@ -214,7 +145,7 @@ renderLayers(painter.getDocument());
 document.querySelector<HTMLButtonElement>('#add-layer')!.addEventListener('click', () => {
   painter.createLayer();
   const activeLayer = getActiveLayer(painter.getDocument());
-  syncLayerStatus(`${activeLayer?.name ?? 'New layer'} created and selected.`);
+  syncLayerStatus(layerStatus, `${activeLayer?.name ?? 'New layer'} created and selected.`);
 });
 undoButton.addEventListener('click', () => painter.undo());
 redoButton.addEventListener('click', () => painter.redo());
