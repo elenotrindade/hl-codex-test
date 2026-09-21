@@ -115,6 +115,58 @@ export function setLayerLocked(document: ArtworkDocument, layerId: string, locke
   return layer;
 }
 
+export function setLayerVisible(document: ArtworkDocument, layerId: string, visible: boolean, updatedAt = timestamp()): ArtworkLayer | null {
+  const layer = document.layers.find(item => item.id === layerId) ?? null;
+  if (!layer) return null;
+  layer.visible = visible;
+  layer.updatedAt = updatedAt;
+  document.updatedAt = updatedAt;
+  return layer;
+}
+
+export function duplicateLayer(document: ArtworkDocument, layerId: string, updatedAt = timestamp()): ArtworkLayer | null {
+  const index = document.layers.findIndex(item => item.id === layerId);
+  if (index < 0) return null;
+  const source = document.layers[index];
+  const layer: ArtworkLayer = {
+    ...source,
+    id: uniqueLayerId(document),
+    name: normalizeLayerName(`${source.name} copy`, `Paint layer ${document.layers.length + 1}`),
+    marks: source.marks.map(cloneMark),
+    createdAt: updatedAt,
+    updatedAt,
+  };
+  document.layers.splice(index + 1, 0, layer);
+  document.activeLayerId = layer.id;
+  document.updatedAt = updatedAt;
+  return layer;
+}
+
+export function moveLayer(document: ArtworkDocument, layerId: string, direction: 'up' | 'down', updatedAt = timestamp()): boolean {
+  const index = document.layers.findIndex(item => item.id === layerId);
+  if (index < 0) return false;
+  const target = direction === 'up' ? index + 1 : index - 1;
+  if (target < 0 || target >= document.layers.length) return false;
+  const [layer] = document.layers.splice(index, 1);
+  document.layers.splice(target, 0, layer);
+  layer.updatedAt = updatedAt;
+  document.updatedAt = updatedAt;
+  return true;
+}
+
+export function deleteLayer(document: ArtworkDocument, layerId: string, updatedAt = timestamp()): ArtworkLayer | null {
+  if (document.layers.length <= 1) return null;
+  const index = document.layers.findIndex(item => item.id === layerId);
+  if (index < 0) return null;
+  const [removed] = document.layers.splice(index, 1);
+  if (document.activeLayerId === removed.id) {
+    const fallbackIndex = Math.min(index, document.layers.length - 1);
+    document.activeLayerId = document.layers[fallbackIndex].id;
+  }
+  document.updatedAt = updatedAt;
+  return removed;
+}
+
 export function flattenVisibleMarks(document: ArtworkDocument): PaintMark[] {
   return document.layers.flatMap(layer => layer.visible ? layer.marks.map(cloneMark) : []);
 }

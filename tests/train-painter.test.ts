@@ -25,6 +25,11 @@ function setup(initial: ReturnType<typeof createPaintMark>[] | ArtworkDocument =
   };
   return { painter, canvas, context, onChange, onCursor, send };
 }
+function canvasContext() {
+  return Object.fromEntries(['scale', 'beginPath', 'rect', 'clip', 'save', 'restore', 'arc',
+    'fill', 'stroke', 'moveTo', 'lineTo', 'closePath', 'translate', 'rotate', 'fillRect', 'clearRect', 'drawImage']
+    .map(name => [name, vi.fn()]));
+}
 afterEach(() => vi.unstubAllGlobals());
 
 describe('responsive canvas', () => {
@@ -85,7 +90,7 @@ describe('responsive canvas', () => {
 describe('gallery snapshots', () => {
   it('freezes paint before loading the train and exports base then overlay as PNG', async () => {
     const { painter, canvas } = setup();
-    const overlayContext = { drawImage: vi.fn() };
+    const overlayContext = canvasContext();
     const outputContext = { drawImage: vi.fn(), fillRect: vi.fn(), fillStyle: '' };
     const overlay = { getContext: () => overlayContext, width: 0, height: 0 };
     const output = { getContext: () => outputContext, toDataURL: vi.fn(() => 'data:image/png;base64,YQ=='), width: 0, height: 0 };
@@ -93,7 +98,7 @@ describe('gallery snapshots', () => {
     let train: { onload: () => void; src: string };
     vi.stubGlobal('Image', class { constructor() { train = this as unknown as typeof train; } });
     const result = painter.createSnapshot();
-    expect(overlayContext.drawImage).toHaveBeenCalledWith(canvas, 0, 0, 1000, 400);
+    expect(overlayContext.arc).toHaveBeenCalledTimes(0);
     expect(outputContext.drawImage).not.toHaveBeenCalled();
     expect(train!.src).toBe('/references/train-cart.png');
     painter.clear();
@@ -305,6 +310,50 @@ describe('paint marks and stroke lifecycle', () => {
     send('pointerup');
     expect(painter.getDocument().layers[0].marks).toEqual([]);
     expect(onChange).not.toHaveBeenCalled();
+    painter.destroy();
+  });
+
+  it('replays visible layers in stack order and excludes hidden layers from snapshots', async () => {
+    const document = documentFromSnapshot({ marks: [createPaintMark({ x: 0.4, y: 0.5 }, tool)], updatedAt: '2026-09-17T12:00:00.000Z' });
+    document.layers.push({
+      id: 'paint-layer-2', name: 'Top', visible: true, locked: false,
+      marks: [createPaintMark({ x: 0.6, y: 0.5 }, { ...tool, color: '#72d6ae' })],
+      createdAt: document.updatedAt, updatedAt: document.updatedAt,
+    });
+    document.activeLayerId = 'paint-layer-2';
+    const { painter, context } = setup(document);
+    expect(context.arc.mock.calls.map(call => call[0])).toEqual([400, 600]);
+    context.arc.mockClear();
+    painter.setLayerVisible('paint-layer-2', false);
+    expect(context.arc.mock.calls.map(call => call[0])).toEqual([400]);
+    const overlayContext = canvasContext();
+    const outputContext = { drawImage: vi.fn(), fillRect: vi.fn(), fillStyle: '' };
+    const overlay = { getContext: () => overlayContext, width: 0, height: 0 };
+    const output = { getContext: () => outputContext, toDataURL: vi.fn(() => 'data:image/png;base64,Yw=='), width: 0, height: 0 };
+    vi.stubGlobal('document', { createElement: vi.fn().mockReturnValueOnce(overlay).mockReturnValueOnce(output) });
+    let image: { onload: () => void; src: string };
+    vi.stubGlobal('Image', class { constructor() { image = this as unknown as typeof image; } });
+    const result = painter.createSnapshot();
+    expect(overlayContext.arc.mock.calls.map(call => call[0])).toEqual([400]);
+    image!.onload();
+    await expect(result).resolves.toBe('data:image/png;base64,Yw==');
+    painter.destroy();
+  });
+
+  it('duplicates, reorders, and deletes layers while keeping stroke history targets stable', () => {
+    const document = documentFromSnapshot({ marks: [createPaintMark({ x: 0.4, y: 0.5 }, tool)], updatedAt: '2026-09-17T12:00:00.000Z' });
+    const { painter, send } = setup(document);
+    painter.createLayer('Top');
+    send('pointerdown', { clientX: 600 });
+    send('pointerup', { clientX: 600 });
+    painter.duplicateLayer('paint-layer-2');
+    painter.moveLayer('paint-layer-3', 'down');
+    painter.deleteLayer('paint-layer-2');
+    expect(painter.getDocument().activeLayerId).toBe('paint-layer-3');
+    painter.undo();
+    expect(painter.getDocument().layers.some(layer => layer.id === 'paint-layer-2')).toBe(false);
+    painter.redo();
+    expect(painter.getDocument().layers.some(layer => layer.id === 'paint-layer-2')).toBe(false);
     painter.destroy();
   });
 });

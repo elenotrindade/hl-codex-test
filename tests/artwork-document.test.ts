@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { cloneArtworkDocument, createDefaultArtworkDocument, createLayer, DEFAULT_LAYER_NAME, documentFromSnapshot, flattenVisibleMarks, getActiveLayer, renameLayer, selectLayer, setLayerLocked } from '../src/artwork-document';
+import { cloneArtworkDocument, createDefaultArtworkDocument, createLayer, DEFAULT_LAYER_NAME, deleteLayer, documentFromSnapshot, duplicateLayer, flattenVisibleMarks, getActiveLayer, moveLayer, renameLayer, selectLayer, setLayerLocked, setLayerVisible } from '../src/artwork-document';
 import { type PaintMark } from '../src/train-painter';
 
 const mark: PaintMark = { x: 0.5, y: 0.5, size: 0.025, opacity: 0.8, color: '#e2483d', texture: 'solid' };
@@ -42,5 +42,32 @@ describe('artwork documents', () => {
     expect(selectLayer(document, 'missing')).toBeNull();
     expect(renameLayer(document, 'missing', 'Nope')).toBeNull();
     expect(setLayerLocked(document, 'missing', false)).toBeNull();
+  });
+
+  it('hides, duplicates, and reorders layers in bottom-to-top stack order', () => {
+    const document = documentFromSnapshot({ marks: [mark], updatedAt: '2026-09-17T12:00:00.000Z' });
+    const top = createLayer(document, 'Top', '2026-09-17T12:01:00.000Z');
+    top.marks.push({ ...mark, x: 0.6 });
+    expect(setLayerVisible(document, top.id, false, '2026-09-17T12:02:00.000Z')?.visible).toBe(false);
+    expect(flattenVisibleMarks(document)).toEqual([mark]);
+    const copy = duplicateLayer(document, 'paint-layer-1', '2026-09-17T12:03:00.000Z')!;
+    expect(copy).toMatchObject({ id: 'paint-layer-3', name: 'Paint layer 1 copy', visible: true, locked: false });
+    expect(copy.marks).toEqual([mark]);
+    expect(document.activeLayerId).toBe(copy.id);
+    expect(moveLayer(document, copy.id, 'down', '2026-09-17T12:04:00.000Z')).toBe(true);
+    expect(document.layers.map(layer => layer.id)).toEqual(['paint-layer-3', 'paint-layer-1', 'paint-layer-2']);
+    expect(moveLayer(document, 'missing', 'up')).toBe(false);
+  });
+
+  it('deletes layers with nearest active fallback and keeps the final layer', () => {
+    const document = createDefaultArtworkDocument('2026-09-17T12:00:00.000Z');
+    createLayer(document, 'Middle', '2026-09-17T12:01:00.000Z');
+    const top = createLayer(document, 'Top', '2026-09-17T12:02:00.000Z');
+    expect(deleteLayer(document, top.id, '2026-09-17T12:03:00.000Z')?.id).toBe(top.id);
+    expect(document.activeLayerId).toBe('paint-layer-2');
+    expect(deleteLayer(document, 'paint-layer-1')?.id).toBe('paint-layer-1');
+    expect(deleteLayer(document, 'paint-layer-2')).toBeNull();
+    expect(document.layers).toHaveLength(1);
+    expect(document.activeLayerId).toBe('paint-layer-2');
   });
 });

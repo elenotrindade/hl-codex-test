@@ -1,6 +1,6 @@
 import { getScenario, isInsidePaintableArea, type PaintScenario } from './scenarios';
 import { type Point } from './train-template';
-import { cloneArtworkDocument, createDefaultArtworkDocument, createLayer as addDocumentLayer, flattenVisibleMarks, getActiveLayer, renameLayer as renameDocumentLayer, selectLayer, setLayerLocked as setDocumentLayerLocked, touchDocument, type ArtworkDocument } from './artwork-document';
+import { cloneArtworkDocument, createDefaultArtworkDocument, createLayer as addDocumentLayer, deleteLayer as deleteDocumentLayer, duplicateLayer as duplicateDocumentLayer, flattenVisibleMarks, getActiveLayer, moveLayer as moveDocumentLayer, renameLayer as renameDocumentLayer, selectLayer, setLayerLocked as setDocumentLayerLocked, setLayerVisible as setDocumentLayerVisible, touchDocument, type ArtworkDocument } from './artwork-document';
 
 export const TEXTURES = ['solid', 'spray', 'marker'] as const;
 export type TextureId = typeof TEXTURES[number];
@@ -92,6 +92,7 @@ export class TrainPainter {
     const activeLayer = getActiveLayer(this.document);
     this.undoStack = activeLayer && activeLayer.marks.length ? [{ layerId: activeLayer.id, marks: activeLayer.marks.map(mark => ({ ...mark })) }] : [];
     this.redoStack = [];
+    this.context.clearRect(0, 0, this.scenario.width, this.scenario.height);
     this.resize(true);
     this.notifyHistoryChange();
   }
@@ -121,6 +122,34 @@ export class TrainPainter {
   setLayerLocked(layerId: string, locked: boolean): void {
     this.cancel();
     if (!setDocumentLayerLocked(this.document, layerId, locked)) return;
+    this.emitChange(false);
+  }
+
+  setLayerVisible(layerId: string, visible: boolean): void {
+    this.cancel();
+    if (!setDocumentLayerVisible(this.document, layerId, visible)) return;
+    this.resize(true);
+    this.emitChange(false);
+  }
+
+  duplicateLayer(layerId: string): void {
+    this.cancel();
+    if (!duplicateDocumentLayer(this.document, layerId)) return;
+    this.resize(true);
+    this.emitChange(false);
+  }
+
+  moveLayer(layerId: string, direction: 'up' | 'down'): void {
+    this.cancel();
+    if (!moveDocumentLayer(this.document, layerId, direction)) return;
+    this.resize(true);
+    this.emitChange(false);
+  }
+
+  deleteLayer(layerId: string): void {
+    this.cancel();
+    if (!deleteDocumentLayer(this.document, layerId)) return;
+    this.resize(true);
     this.emitChange(false);
   }
 
@@ -175,7 +204,7 @@ export class TrainPainter {
     }
     this.context.clip();
     this.previous = null;
-    for (const mark of flattenVisibleMarks(this.document)) this.render(mark);
+    this.replayMarks(this.context);
   };
 
   async createSnapshot(): Promise<string> {
@@ -184,8 +213,8 @@ export class TrainPainter {
     overlay.height = this.scenario.height;
     const overlayContext = overlay.getContext('2d');
     if (!overlayContext) throw new Error('Snapshot canvas unavailable');
-    // Freeze the paint before loading the SVG so later strokes cannot alter this submission.
-    overlayContext.drawImage(this.canvas, 0, 0, this.scenario.width, this.scenario.height);
+    // Freeze the current visible document state before loading the SVG.
+    this.replayMarks(overlayContext);
     const base = new Image();
     await new Promise<void>((resolve, reject) => {
       base.onload = () => resolve();
@@ -213,6 +242,7 @@ export class TrainPainter {
     this.undoStack = [];
     this.redoStack = [];
     this.context.clearRect(0, 0, this.scenario.width, this.scenario.height);
+    this.resize(true);
     this.emitChange();
   }
 
@@ -279,7 +309,14 @@ export class TrainPainter {
   }
 
   private render(mark: PaintMark): void {
-    const ctx = this.context;
+    this.renderTo(this.context, mark);
+  }
+
+  private replayMarks(ctx: CanvasRenderingContext2D): void {
+    for (const mark of flattenVisibleMarks(this.document)) this.renderTo(ctx, mark);
+  }
+
+  private renderTo(ctx: CanvasRenderingContext2D, mark: PaintMark): void {
     const x = mark.x * this.scenario.width;
     const y = mark.y * this.scenario.height;
     const radius = mark.size * this.scenario.width / 2;

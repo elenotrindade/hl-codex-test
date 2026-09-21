@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { ARTWORK_KEY, loadArtwork, saveArtwork, type ArtworkSnapshot } from '../src/storage';
+import { ARTWORK_KEY, loadArtwork, loadArtworkDocument, saveArtwork, type ArtworkSnapshot } from '../src/storage';
 import { TEXTURES } from '../src/train-painter';
 import { getScenario } from '../src/scenarios';
+import { documentFromSnapshot } from '../src/artwork-document';
 
 const snapshot: ArtworkSnapshot = {
   marks: TEXTURES.map(texture => ({ x: 0.5, y: 0.5, size: 0.025, opacity: 0.8, color: '#e2483d', texture })),
@@ -64,5 +65,15 @@ describe('artwork storage', () => {
     expect(saveArtwork(wallSnapshot, storage, getScenario('wall'))).toBe(true);
     expect(loadArtwork(storage, getScenario('wall'))).toEqual({ snapshot: wallSnapshot, status: 'loaded' });
     expect(loadArtwork(storage, getScenario('train'))).toEqual({ snapshot: null, status: 'invalid' });
+  });
+  it('rejects malformed layer stacks', () => {
+    const document = documentFromSnapshot(snapshot);
+    document.layers.push({ ...document.layers[0], id: 'paint-layer-2', name: 'Top', marks: [] });
+    expect(loadArtworkDocument(memory(JSON.stringify(document))).status).toBe('loaded');
+    expect(saveArtwork(document, memory())).toBe(true);
+    expect(loadArtworkDocument(memory(JSON.stringify({ ...document, layers: [] })))).toEqual({ document: null, status: 'invalid' });
+    expect(loadArtworkDocument(memory(JSON.stringify({ ...document, activeLayerId: 'missing' })))).toEqual({ document: null, status: 'invalid' });
+    expect(loadArtworkDocument(memory(JSON.stringify({ ...document, layers: [document.layers[0], { ...document.layers[1], id: document.layers[0].id }] })))).toEqual({ document: null, status: 'invalid' });
+    expect(loadArtworkDocument(memory(JSON.stringify({ ...document, layers: [{ ...document.layers[0], updatedAt: 'not a date' }] })))).toEqual({ document: null, status: 'invalid' });
   });
 });
