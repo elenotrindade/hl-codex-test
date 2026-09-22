@@ -514,4 +514,54 @@ describe('paint marks and stroke lifecycle', () => {
     expect(painter.getDocument().layers.some(layer => layer.id === 'paint-layer-2')).toBe(false);
     painter.destroy();
   });
+
+  it('does not rebuild the canvas bitmap while a tapered spray stroke grows', () => {
+    const existing = Array.from({ length: 30 }, () => createPaintMark({ x: 0.5, y: 0.45 }, { ...tool, texture: 'spray', drip: 0 }));
+    const { painter, canvas, send } = setup(existing);
+    painter.setTool({ ...tool, texture: 'spray', taper: 1, drip: 0 });
+    let writes = 0;
+    let width = canvas.width;
+    let height = canvas.height;
+    Object.defineProperty(canvas, 'width', { configurable: true, get: () => width, set(value) { width = value; writes += 1; } });
+    Object.defineProperty(canvas, 'height', { configurable: true, get: () => height, set(value) { height = value; writes += 1; } });
+    send('pointerdown', { clientX: 300, clientY: 180 });
+    send('pointermove', { clientX: 700, clientY: 180 });
+    send('pointerup', { clientX: 700, clientY: 180 });
+    expect(writes).toBe(0);
+    painter.destroy();
+  });
+
+  it('keeps a metal color on the brush that is already selected', () => {
+    const { painter, send } = setup();
+    painter.setTool({ ...tool, texture: 'spray', finish: 'gold', drip: 0, cap: 'fat' });
+    send('pointerdown', { clientX: 400, clientY: 180 });
+    send('pointerup', { clientX: 400, clientY: 180 });
+    const marks = painter.getMarks();
+    expect(marks.length).toBeGreaterThan(1);
+    expect(marks.every(mark => mark.texture === 'spray' && mark.finish === 'gold' && mark.cap === 'fat')).toBe(true);
+    painter.setTool({ ...tool, texture: 'marker', finish: 'chrome' });
+    send('pointerdown', { clientX: 600, clientY: 180 });
+    send('pointerup', { clientX: 600, clientY: 180 });
+    const marker = painter.getMarks().filter(mark => mark.texture === 'marker');
+    expect(marker.length).toBeGreaterThan(0);
+    expect(marker.every(mark => mark.finish === 'chrome')).toBe(true);
+    painter.destroy();
+  });
+
+  it('pinches spray strokes at both ends and keeps the cap', () => {
+    const { painter, send } = setup();
+    painter.setTool({ ...tool, texture: 'spray', taper: 1, cap: 'fat', drip: 0 });
+    send('pointerdown', { clientX: 300, clientY: 180 });
+    send('pointermove', { clientX: 700, clientY: 180 });
+    send('pointerup', { clientX: 700, clientY: 180 });
+    const marks = painter.getMarks();
+    const sizes = marks.map(mark => mark.size);
+    const middle = sizes[Math.floor(sizes.length / 2)];
+    expect(sizes[0]).toBeLessThan(middle);
+    expect(sizes[sizes.length - 1]).toBeLessThan(middle);
+    expect(marks.every(mark => mark.cap === 'fat')).toBe(true);
+    painter.undo();
+    expect(painter.getMarks()).toEqual([]);
+    painter.destroy();
+  });
 });

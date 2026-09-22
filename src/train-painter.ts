@@ -7,19 +7,22 @@ import { clamp, paintColorHex } from './color-tools';
 import { clampEditorText, drawShapeStamp, drawTextStamp, type EditorFontId, type ShapeKind, type ShapeStamp, type TextStamp } from './editor-tools';
 import { hitShapeBody, hitShapeHandle, moveShapeMark, resizeShapeMark, shapeBox, shapeHandlePoints, type ShapeHandleId } from './shape-edit';
 import { SprayCanAudio } from './spray-audio';
-import { SPRAY_CLICK_BURST, sprayDripLength, stampDrip, stampSpray } from './spray-physics';
+import { isMetalTexture, METAL_TEXTURES, metalPaintStyle, type MetalTexture } from './metal-paint';
+import { SPRAY_CLICK_BURST, sprayDripLength, sprayTaperAt, stampDrip, stampSpray, type SprayCap } from './spray-physics';
 
 export const BRUSH_TEXTURES = ['solid', 'spray', 'marker', 'custom'] as const;
-export const TEXTURES = [...BRUSH_TEXTURES, 'shape', 'text'] as const;
+export { METAL_TEXTURES };
+export const TEXTURES = [...BRUSH_TEXTURES, ...METAL_TEXTURES, 'shape', 'text'] as const;
 export type TextureId = typeof TEXTURES[number];
 export type ToolState = {
   color: string; texture: TextureId; brushSize: number; opacity: number; weight: number; drip?: number; erase?: boolean; brush?: CustomBrush;
   shapeKind?: ShapeKind; shapeFill?: boolean; text?: string; font?: EditorFontId; adjust?: boolean;
+  taper?: number; cap?: SprayCap; finish?: MetalTexture;
 };
 // Positions and diameter are normalized; size is a fraction of train width.
 export type PaintMark = Point & {
   color: string; texture: TextureId; size: number; opacity: number; erase?: boolean; brush?: CustomBrush; drip?: number;
-  shape?: ShapeStamp; text?: TextStamp;
+  shape?: ShapeStamp; text?: TextStamp; cap?: SprayCap; finish?: MetalTexture;
 };
 export type CursorPreviewState = { visible: boolean; x: number; y: number; size: number; color: string; opacity: number };
 export type HistoryState = { canUndo: boolean; canRedo: boolean };
@@ -83,6 +86,8 @@ export function createPaintMark(point: Point, tool: ToolState, pressure = 0): Pa
     const value = clampEditorText(tool.text ?? 'YARD');
     if (value) mark.text = { value, font: tool.font ?? 'impact' };
   }
+  if (tool.texture === 'spray') mark.cap = tool.cap ?? 'standard';
+  if (!tool.erase && tool.finish && isMetalTexture(tool.finish)) mark.finish = tool.finish;
   return mark;
 }
 
@@ -103,6 +108,8 @@ export class TrainPainter {
   private selection: ShapeSelection | null = null;
   private editBefore: PaintMark | null = null;
   private adjustDrag: AdjustDrag | null = null;
+  private strokeBases: number[] = [];
+  private strokeBackdrop: HTMLCanvasElement | null = null;
   private readonly emitLegacyMarks: boolean;
   private resizeObserver?: ResizeObserver;
   private resolutionQuery?: MediaQueryList;
@@ -337,11 +344,14 @@ export class TrainPainter {
     this.activePointer = event.pointerId;
     this.previous = point;
     this.currentStroke = { layerId: '', marks: [] };
+    this.strokeBases = [];
+    this.captureStrokeBackdrop();
     this.paint(point, event.pressure);
     if (isPlacementTexture(this.tool.texture)) return;
     if (!this.tool.erase) {
       for (let i = 1; i < SPRAY_CLICK_BURST; i++) this.paint(point, event.pressure);
     }
+    this.flushSprayTaper();
     this.startSprayFx();
   };
 
@@ -372,6 +382,7 @@ export class TrainPainter {
       this.paint({ x: previous.x + (point.x - previous.x) * step / steps,
         y: previous.y + (point.y - previous.y) * step / steps }, event.pressure);
     }
+    this.flushSprayTaper();
     this.previous = point;
   };
 
@@ -393,7 +404,72 @@ export class TrainPainter {
     if (mark.shape) stamped.shape = { ...mark.shape };
     if (mark.text) stamped.text = { ...mark.text };
     this.currentStroke.marks.push(stamped);
+    if (this.tool.texture === 'spray' && (this.tool.taper ?? 0) > 0) {
+      this.strokeBases.push(mark.size);
+      return;
+    }
     this.render(mark);
+  }
+
+  private captureStrokeBackdrop(): void {
+    this.strokeBackdrop = null;
+    if (this.tool.texture !== 'spray' || (this.tool.taper ?? 0) <= 0) return;
+    if (typeof document === 'undefined') return;
+    const width = this.canvas.width;
+    const height = this.canvas.height;
+    if (!width || !height) return;
+    const backdrop = document.createElement('canvas');
+    backdrop.width = width;
+    backdrop.height = height;
+    const copy = backdrop.getContext('2d');
+    if (!copy) return;
+    copy.drawImage(this.canvas, 0, 0);
+    this.strokeBackdrop = backdrop;
+  }
+
+  private flushSprayTaper(): void {
+    if (this.tool.texture !== 'spray' || (this.tool.taper ?? 0) <= 0 || this.strokeBases.length === 0) return;
+    this.applySprayTaper();
+    this.redrawTaperedStroke();
+  }
+
+  private redrawTaperedStroke(): void {
+    const pixelWidth = this.canvas.width || this.scenario.width;
+    const pixelHeight = this.canvas.height || this.scenario.height;
+    if (typeof this.context.setTransform === 'function') {
+      this.context.setTransform(1, 0, 0, 1, 0, 0);
+      this.context.clearRect(0, 0, pixelWidth, pixelHeight);
+      if (this.strokeBackdrop) this.context.drawImage(this.strokeBackdrop, 0, 0);
+      this.context.setTransform(pixelWidth / this.scenario.width, 0, 0, pixelHeight / this.scenario.height, 0, 0);
+      for (const mark of this.currentStroke.marks) this.renderTo(this.context, mark);
+      return;
+    }
+    this.context.clearRect(0, 0, this.scenario.width, this.scenario.height);
+    this.replayMarks(this.context);
+  }
+
+  private applySprayTaper(): void {
+    const count = this.strokeBases.length;
+    const taper = this.tool.taper ?? 0;
+    const marks = this.currentStroke.marks;
+    const distances = [0];
+    for (let index = 1; index < count; index += 1) {
+      const previous = marks[index - 1];
+      const current = marks[index];
+      const dx = ((current?.x ?? 0) - (previous?.x ?? 0)) * this.scenario.width;
+      const dy = ((current?.y ?? 0) - (previous?.y ?? 0)) * this.scenario.height;
+      distances.push(distances[index - 1] + Math.hypot(dx, dy));
+    }
+    const length = distances[count - 1] ?? 0;
+    if (length <= 0) return;
+    const layer = this.document.layers.find(item => item.id === this.currentStroke.layerId);
+    const start = layer ? layer.marks.length - count : 0;
+    for (let index = 0; index < count; index += 1) {
+      const along = distances[index] / length;
+      const size = clamp(this.strokeBases[index] * sprayTaperAt(along, taper), 0.003, 0.12);
+      if (marks[index]) marks[index].size = size;
+      if (layer && layer.marks[start + index]) layer.marks[start + index].size = size;
+    }
   }
 
   private reviseShape(point: Point): void {
@@ -472,23 +548,27 @@ export class TrainPainter {
     const radius = mark.size * this.scenario.width / 2;
     ctx.save();
     if (mark.erase) ctx.globalCompositeOperation = 'destination-out';
-    ctx.fillStyle = mark.color;
+    const finish = mark.finish && isMetalTexture(mark.finish) ? mark.finish : isMetalTexture(mark.texture) ? mark.texture : undefined;
+    const brushed = isMetalTexture(mark.texture) ? 'solid' : mark.texture;
+    const paint = finish ? metalPaintStyle(ctx, finish, this.scenario.width, this.scenario.height) : mark.color;
+    ctx.fillStyle = paint;
+    ctx.strokeStyle = paint;
     ctx.globalAlpha = mark.opacity ?? 1;
     ctx.save();
     this.clipPaintable(ctx);
-    if (mark.texture === 'shape' && mark.shape) {
+    if (brushed === 'shape' && mark.shape) {
       drawShapeStamp(ctx, {
         ...mark.shape,
         x2: mark.shape.x2 * this.scenario.width,
         y2: mark.shape.y2 * this.scenario.height,
-      }, x, y, mark.size * this.scenario.width, mark.color);
-    } else if (mark.texture === 'text' && mark.text) {
-      drawTextStamp(ctx, mark.text, x, y, mark.size * this.scenario.width, mark.color);
-    } else if (mark.texture === 'spray') {
-      stampSpray(ctx, x, y, radius, mark.opacity ?? 1, mark, 0, this.scenario.height);
-    } else if (mark.texture === 'custom') {
+      }, x, y, mark.size * this.scenario.width, paint);
+    } else if (brushed === 'text' && mark.text) {
+      drawTextStamp(ctx, mark.text, x, y, mark.size * this.scenario.width, paint);
+    } else if (brushed === 'spray') {
+      stampSpray(ctx, x, y, radius, mark.opacity ?? 1, mark, 0, this.scenario.height, mark.cap);
+    } else if (brushed === 'custom') {
       stampCustomBrush(ctx, x, y, radius, mark.opacity ?? 1, clampCustomBrush(mark.brush));
-    } else if (mark.texture === 'marker') {
+    } else if (brushed === 'marker') {
       ctx.save();
       ctx.globalAlpha = (mark.opacity ?? 1) * 0.55;
       ctx.translate(x, y);
@@ -500,7 +580,9 @@ export class TrainPainter {
       ctx.arc(x, y, radius, 0, Math.PI * 2);
       ctx.fill();
     }
-    if (!mark.erase && !isPlacementTexture(mark.texture)) stampDrip(ctx, x, y, radius, mark.opacity ?? 1, mark.drip ?? 0, this.scenario.height, mark);
+    if (!mark.erase && !isPlacementTexture(brushed)) {
+      stampDrip(ctx, x, y, radius, mark.opacity ?? 1, mark.drip ?? 0, this.scenario.height, mark);
+    }
     ctx.restore();
     ctx.restore();
   }
@@ -536,6 +618,7 @@ export class TrainPainter {
     } else {
       this.activePointer = null;
       this.previous = null;
+      this.strokeBackdrop = null;
       this.currentStroke = { layerId: '', marks: [] };
     }
   };
@@ -570,6 +653,7 @@ export class TrainPainter {
 
   private completeStroke(): void {
     this.stopSprayFx();
+    this.strokeBackdrop = null;
     const pointer = this.activePointer;
     this.activePointer = null;
     this.previous = null;

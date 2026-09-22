@@ -1,3 +1,4 @@
+import { isMetalTexture, metalFallback } from './metal-paint';
 import { type PaintMark } from './train-painter';
 
 function markShape(mark: PaintMark): SVGElement {
@@ -76,7 +77,8 @@ export function createLayerPreview(marks: PaintMark[]): SVGSVGElement {
     if (mark.erase) continue;
     const shape = markShape(mark);
     const outline = mark.texture === 'shape' && mark.shape && (mark.shape.kind === 'line' || mark.shape.kind === 'arrow' || !mark.shape.fill);
-    shape.setAttribute('fill', outline ? 'none' : mark.color);
+    const finish = mark.finish && isMetalTexture(mark.finish) ? mark.finish : isMetalTexture(mark.texture) ? mark.texture : undefined;
+    shape.setAttribute('fill', outline ? 'none' : finish ? metalFallback(finish) : mark.color);
     if (mark.texture === 'shape') shape.setAttribute('stroke', mark.color);
     shape.setAttribute('opacity', String(mark.opacity ?? 1));
     preview.append(shape);

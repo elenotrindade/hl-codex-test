@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 80 48" role="img" aria-label="Chrome paint example">
+  <rect width="80" height="48" fill="#fff4db"/>
+  <defs>
+    <linearGradient id="chrome" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#f7f9fb"/>
+      <stop offset="0.35" stop-color="#8d98a6"/>
+      <stop offset="0.55" stop-color="#f4f7fa"/>
+      <stop offset="1" stop-color="#6d7784"/>
+    </linearGradient>
+  </defs>
+  <circle cx="40" cy="24" r="13" fill="url(#chrome)"/>
+  <circle cx="35" cy="19" r="3" fill="#ffffff" opacity="0.7"/>
+</svg>

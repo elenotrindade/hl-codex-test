@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { dripSteps, sprayDripLength, stampSpray } from '../src/spray-physics';
+import { dripSteps, sprayDripLength, sprayTaperScale, stampSpray, type SprayCap } from '../src/spray-physics';
 
 const spray = (x: number, y = 0.45, size = 0.03) => ({
   x, y, size, opacity: 0.9, color: '#e2483d', texture: 'spray',
@@ -42,5 +42,24 @@ describe('spray physics', () => {
     expect(calls).toEqual(first);
     expect(first.filter(call => call.startsWith('arc:')).length).toBeGreaterThan(36 + dripSteps(0.2, 12, 400));
     expect(first.some(call => call === 'rect')).toBe(false);
+  });
+
+  it('lets a fat cap reach farther than a skinny cap', () => {
+    const spread = (cap: SprayCap) => {
+      const xs: number[] = [];
+      stampSpray({
+        globalAlpha: 1,
+        beginPath: () => {},
+        arc: (x: number) => { xs.push(x); },
+        fill: () => {},
+        fillRect: () => {},
+      }, 100, 80, 20, 1, { x: 0.2, y: 0.2 }, 0, 400, cap);
+      return Math.max(...xs) - Math.min(...xs);
+    };
+    expect(spread('fat')).toBeGreaterThan(spread('skinny'));
+    expect(sprayTaperScale(0, 9, 1)).toBeCloseTo(0);
+    expect(sprayTaperScale(4, 9, 1)).toBeCloseTo(1);
+    expect(sprayTaperScale(8, 9, 1)).toBeCloseTo(0);
+    expect(sprayTaperScale(3, 9, 0)).toBe(1);
   });
 });

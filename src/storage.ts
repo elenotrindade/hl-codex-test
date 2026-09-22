@@ -1,6 +1,8 @@
 import { TEXTURES, type PaintMark } from './train-painter';
 import { isCustomBrush } from './custom-brush';
 import { isShapeStamp, isTextStamp } from './editor-tools';
+import { isMetalTexture } from './metal-paint';
+import { SPRAY_CAPS } from './spray-physics';
 import { clamp, paintColorHex } from './color-tools';
 import { getScenario, isInsidePaintableArea, type PaintScenario } from './scenarios';
 import { isGallery, type GalleryEntry } from './gallery';
@@ -24,6 +26,8 @@ export function isMark(value: unknown, scenario: PaintScenario): value is PaintM
     (mark.erase === undefined || mark.erase === true) &&
     (mark.brush === undefined || isCustomBrush(mark.brush)) &&
     (mark.drip === undefined || Number.isFinite(mark.drip) && mark.drip >= 0 && mark.drip <= 1) &&
+    (mark.cap === undefined || mark.texture === 'spray' && SPRAY_CAPS.includes(mark.cap)) &&
+    (mark.finish === undefined || isMetalTexture(mark.finish)) &&
     (mark.texture === 'shape'
       ? isShapeStamp(mark.shape) && isInsidePaintableArea(scenario, { x: mark.shape.x2, y: mark.shape.y2 })
       : mark.shape === undefined) &&

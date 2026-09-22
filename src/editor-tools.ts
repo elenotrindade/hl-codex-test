@@ -118,7 +118,7 @@ function traceArrow(ctx: DrawContext, x: number, y: number, x2: number, y2: numb
   ctx.lineTo(x2 - Math.cos(angle + 0.45) * head, y2 - Math.sin(angle + 0.45) * head);
 }
 
-export function drawShapeStamp(ctx: DrawContext, shape: ShapeStamp, x: number, y: number, stroke: number, color: string): void {
+export function drawShapeStamp(ctx: DrawContext, shape: ShapeStamp, x: number, y: number, stroke: number, color: CanvasRenderingContext2D['fillStyle']): void {
   ctx.fillStyle = color;
   ctx.strokeStyle = color;
   ctx.lineWidth = clamp(stroke, 2, 80);
@@ -139,7 +139,7 @@ export function drawShapeStamp(ctx: DrawContext, shape: ShapeStamp, x: number, y
   else ctx.stroke();
 }
 
-export function drawTextStamp(ctx: DrawContext, text: TextStamp, x: number, y: number, size: number, color: string): void {
+export function drawTextStamp(ctx: DrawContext, text: TextStamp, x: number, y: number, size: number, color: CanvasRenderingContext2D['fillStyle']): void {
   ctx.fillStyle = color;
   ctx.font = `${Math.max(12, size)}px ${editorFontFamily(text.font)}`;
   ctx.textAlign = 'center';

@@ -3,6 +3,7 @@ import '@fortawesome/fontawesome-free/css/solid.css';
 import './styles.css';
 import { EDITOR_FONTS, SHAPE_KINDS, SHAPE_LABELS, shapeUsesFill, type EditorFontId, type ShapeKind } from './editor-tools';
 import { BOX_HANDLES, LINE_HANDLES, type ShapeHandleId } from './shape-edit';
+import { METAL_TEXTURES, metalFallback, metalPaintStyle, type MetalTexture } from './metal-paint';
 import { TrainPainter, BRUSH_TEXTURES, type ShapeEditFrame, type TextureId, type ToolState } from './train-painter';
 import { BRUSH_TIP_LABELS, BRUSH_TIPS, clampCustomBrush, fittedStampRadius, loadCustomBrush, saveCustomBrush, stampCustomBrush, type BrushTip } from './custom-brush';
 import { loadArtworkDocument, saveArtwork, loadGallery, saveGallery } from './storage';
@@ -16,10 +17,11 @@ import { exportTrainImage, type ExportAction, type ExportOutcome } from './artwo
 import { mountSponsor, sponsorConfig } from './sponsorship';
 import { renderLayerPanel, syncLayerStatus } from './layer-panel';
 import { findPaintCanvas } from './paint-canvas';
+import { SPRAY_CAPS, type SprayCap } from './spray-physics';
 
 const tool: ToolState = {
   color: DEFAULT_COLOR, texture: 'solid', brushSize: 0.025, opacity: 0.9, weight: 1, drip: 0.3, brush: loadCustomBrush(),
-  shapeKind: 'rect', shapeFill: true, text: 'YARD', font: 'impact',
+  shapeKind: 'rect', shapeFill: true, text: 'YARD', font: 'impact', taper: 0.35, cap: 'standard',
 };
 
 function shapeIcon(kind: ShapeKind): string {
@@ -154,6 +156,9 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
               <i class="fa-solid fa-eye-dropper" aria-hidden="true"></i>
             </button>
           </div>
+          <div class="color-presets" role="group" aria-label="Metal colors">
+            ${METAL_TEXTURES.map(metal => `<button type="button" class="color-swatch" data-metal="${metal}" aria-pressed="false" aria-label="${metal[0].toUpperCase()}${metal.slice(1)}" title="${metal[0].toUpperCase()}${metal.slice(1)}"><span class="color-swatch__fill" aria-hidden="true"></span></button>`).join('')}
+          </div>
         </div>
         <label for="brush-opacity">Opacity <output id="opacity-value" for="brush-opacity">90%</output></label>
         <input id="brush-opacity" type="range" min="5" max="100" value="90" aria-valuetext="90 percent" />
@@ -161,6 +166,13 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
         <input id="brush-weight" type="range" min="50" max="200" value="100" aria-valuetext="1.0 times pressure" />
         <label for="brush-drip">Drip <output id="drip-value" for="brush-drip">30%</output></label>
         <input id="brush-drip" type="range" min="0" max="100" value="30" aria-valuetext="30 percent" />
+        <div id="spray-controls" hidden>
+          <label for="spray-taper">Taper <output id="taper-value" for="spray-taper">35%</output></label>
+          <input id="spray-taper" type="range" min="0" max="100" value="35" aria-valuetext="35 percent" />
+          <div class="spray-caps" role="radiogroup" aria-label="Spray cap">
+            ${SPRAY_CAPS.map(cap => `<button type="button" data-cap="${cap}" aria-pressed="${cap === 'standard'}" aria-label="${cap} cap">${cap}</button>`).join('')}
+          </div>
+        </div>
         <button type="button" id="spray-audio" aria-pressed="true" title="Spray sound">
           <i class="fa-solid fa-volume-high" aria-hidden="true"></i>
           Sound
@@ -249,7 +261,7 @@ const painter = new TrainPainter(canvas, tool, document => {
   cursor.style.setProperty('--cursor-x', `${state.x * 100}%`);
   cursor.style.setProperty('--cursor-y', `${state.y * 100}%`);
   cursor.style.setProperty('--cursor-size', `${state.size * activeScenario.width}px`);
-  cursor.style.setProperty('--cursor-color', tool.erase ? '#fff4db' : state.color);
+  cursor.style.setProperty('--cursor-color', tool.erase ? '#fff4db' : tool.finish ? metalFallback(tool.finish) : state.color);
   cursor.style.setProperty('--cursor-opacity', String(state.opacity));
   stage.dataset.eraser = String(Boolean(tool.erase));
 }, updateHistoryControls, syncShapeEditor);
@@ -385,7 +397,7 @@ function paintStampPreview(canvas: HTMLCanvasElement): void {
   context.clearRect(0, 0, canvas.width, canvas.height);
   context.fillStyle = '#fff4db';
   context.fillRect(0, 0, canvas.width, canvas.height);
-  context.fillStyle = tool.erase ? '#171513' : tool.color;
+  context.fillStyle = tool.erase ? '#171513' : tool.finish ? metalPaintStyle(context, tool.finish, canvas.width, canvas.height) : tool.color;
   stampCustomBrush(context, canvas.width / 2, canvas.height / 2, fittedStampRadius(canvas.width, canvas.height, brush), 0.9, brush);
 }
 
@@ -481,6 +493,10 @@ function syncEditorChrome(): void {
   textPanel.hidden = !writing;
   shapeFillLabel.hidden = !shaping || !shapeUsesFill(tool.shapeKind ?? 'rect');
   sizeLabel.textContent = adjusting ? 'Adjust' : writing ? 'Letter size' : shaping ? 'Stroke' : 'Brush size';
+  document.querySelector('#spray-controls')?.toggleAttribute('hidden', tool.texture !== 'spray' || adjusting);
+  document.querySelectorAll<HTMLButtonElement>('[data-cap]').forEach(button => {
+    button.setAttribute('aria-pressed', String(button.dataset.cap === (tool.cap ?? 'standard')));
+  });
 }
 
 document.querySelector<HTMLButtonElement>('#shape-adjust')!.addEventListener('click', () => {
@@ -557,19 +573,28 @@ function syncColorReadout(): void {
     selectedColorRgba.textContent = 'removes paint';
     return;
   }
+  if (tool.finish) {
+    selectedColorHex.textContent = tool.finish;
+    selectedColorRgba.textContent = 'metal paint';
+    return;
+  }
   const readout = describePaintColor(tool.color, tool.opacity);
   selectedColorHex.textContent = readout.hex;
   selectedColorRgba.textContent = readout.rgba;
 }
 
 function syncColorPresets(): void {
-  colorPresets.forEach(button => button.setAttribute('aria-pressed', String(button.dataset.colorPreset === activePreset && !tool.erase)));
+  colorPresets.forEach(button => button.setAttribute('aria-pressed', String(button.dataset.colorPreset === activePreset && !tool.erase && !tool.finish)));
+  document.querySelectorAll<HTMLButtonElement>('[data-metal]').forEach(button => {
+    button.setAttribute('aria-pressed', String(button.dataset.metal === tool.finish && !tool.erase));
+  });
   eraserButton.setAttribute('aria-pressed', String(Boolean(tool.erase)));
 }
 
 function applyPaintColor(color: string): void {
   setPickingColor(false);
   tool.color = paintColorHex(color);
+  tool.finish = undefined;
   tool.erase = false;
   painter.setTool(tool);
   colorWheel.style.setProperty('--selected-color', color);
@@ -584,6 +609,7 @@ function applyPaintColor(color: string): void {
 function activateEraser(): void {
   activePreset = null;
   setPickingColor(false);
+  tool.finish = undefined;
   tool.erase = true;
   painter.setTool(tool);
   colorWheel.classList.add('color-wheel__surface--preset');
@@ -645,6 +671,18 @@ colorPresets.forEach(button => {
     activePreset = button.dataset.colorPreset ?? null;
     if (!activePreset) return;
     applyPaintColor(activePreset);
+  });
+});
+document.querySelectorAll<HTMLButtonElement>('[data-metal]').forEach(button => {
+  button.addEventListener('click', () => {
+    activePreset = null;
+    setPickingColor(false);
+    tool.finish = button.dataset.metal as MetalTexture;
+    tool.erase = false;
+    painter.setTool(tool);
+    syncColorReadout();
+    syncColorPresets();
+    paintCustomPreview();
   });
 });
 eraserButton.addEventListener('click', () => activateEraser());
@@ -733,6 +771,20 @@ document.querySelector<HTMLInputElement>('#brush-drip')!.addEventListener('input
   painter.setTool(tool);
   document.querySelector<HTMLOutputElement>('#drip-value')!.value = `${value}%`;
   (event.target as HTMLInputElement).setAttribute('aria-valuetext', `${value} percent`);
+});
+document.querySelector<HTMLInputElement>('#spray-taper')!.addEventListener('input', event => {
+  const value = (event.target as HTMLInputElement).valueAsNumber;
+  tool.taper = value / 100;
+  painter.setTool(tool);
+  document.querySelector<HTMLOutputElement>('#taper-value')!.value = `${value}%`;
+  (event.target as HTMLInputElement).setAttribute('aria-valuetext', `${value} percent`);
+});
+document.querySelectorAll<HTMLButtonElement>('[data-cap]').forEach(button => {
+  button.addEventListener('click', () => {
+    tool.cap = button.dataset.cap as SprayCap;
+    painter.setTool(tool);
+    syncEditorChrome();
+  });
 });
 const sprayAudioButton = document.querySelector<HTMLButtonElement>('#spray-audio')!;
 sprayAudioButton.addEventListener('click', () => {

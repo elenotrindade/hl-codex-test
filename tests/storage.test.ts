@@ -8,6 +8,10 @@ function sampleMark(texture: TextureId): PaintMark {
   const mark: PaintMark = { x: 0.5, y: 0.5, size: 0.025, opacity: 0.8, color: '#e2483d', texture };
   if (texture === 'shape') mark.shape = { kind: 'rect', x2: 0.7, y2: 0.6, fill: true };
   if (texture === 'text') mark.text = { value: 'YARD', font: 'impact' };
+  if (texture === 'spray') {
+    mark.cap = 'fat';
+    mark.finish = 'gold';
+  }
   return mark;
 }
 

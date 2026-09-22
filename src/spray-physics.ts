@@ -7,6 +7,31 @@ type WetMark = Point & { color: string; texture: string; size: number; opacity?:
 // Kept in-repo so undo/replay stay deterministic and we do not take over the canvas.
 
 export const SPRAY_CLICK_BURST = 12;
+export const SPRAY_CAPS = ['skinny', 'standard', 'fat', 'soft'] as const;
+export type SprayCap = typeof SPRAY_CAPS[number];
+
+const CAP_PROFILES: Record<SprayCap, { radius: number; speckles: number; speckle: number; falloff: number }> = {
+  skinny: { radius: 0.62, speckles: 16, speckle: 0.045, falloff: 0.25 },
+  standard: { radius: 1, speckles: 36, speckle: 0.05, falloff: 0 },
+  fat: { radius: 1.7, speckles: 58, speckle: 0.08, falloff: 0.4 },
+  soft: { radius: 1.35, speckles: 44, speckle: 0.11, falloff: 0.85 },
+};
+
+export function sprayCapProfile(cap?: string): { radius: number; speckles: number; speckle: number; falloff: number } {
+  return CAP_PROFILES[(SPRAY_CAPS as readonly string[]).includes(cap ?? '') ? cap as SprayCap : 'standard'];
+}
+
+export function sprayTaperAt(along: number, taper: number): number {
+  const amount = clamp(taper, 0, 1);
+  if (amount <= 0) return 1;
+  const body = Math.sin(Math.PI * clamp(along, 0, 1));
+  return 1 - amount * (1 - body);
+}
+
+export function sprayTaperScale(index: number, count: number, taper: number): number {
+  if (count <= 1) return 1;
+  return sprayTaperAt(index / (count - 1), taper);
+}
 const WET_RADIUS = 1.7;
 const DRIP_START = 10.5;
 
@@ -44,17 +69,21 @@ export function stampSpray(
   seedPoint: Point,
   drip = 0,
   height = 400,
+  cap?: SprayCap,
 ): void {
+  const profile = sprayCapProfile(cap);
+  const reach = radius * profile.radius;
   let seed = (Math.round(seedPoint.x * 1e6) ^ Math.round(seedPoint.y * 1e6) ^ Math.round(drip * 1e4)) >>> 0;
   const random = (): number => {
     seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
     return seed / 4294967296;
   };
-  ctx.globalAlpha = opacity * 0.42;
-  for (let i = 0; i < 36; i++) {
+  for (let i = 0; i < profile.speckles; i++) {
     const angle = random() * Math.PI * 2;
-    const distance = Math.sqrt(random()) * radius;
-    const speckle = radius * (0.04 + random() * 0.05);
+    const distance = Math.sqrt(random()) * reach;
+    const speckle = reach * (0.04 + random() * profile.speckle);
+    const falloff = 1 - (reach > 0 ? distance / reach : 0) * profile.falloff;
+    ctx.globalAlpha = opacity * 0.42 * Math.max(0.08, falloff);
     ctx.beginPath();
     ctx.arc(x + Math.cos(angle) * distance, y + Math.sin(angle) * distance, speckle, 0, Math.PI * 2);
     ctx.fill();
