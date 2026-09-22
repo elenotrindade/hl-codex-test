@@ -13,6 +13,7 @@ import { publishArtwork, upvote, rankGallery, paginateGallery, type GalleryEntry
 import { getScenario, scenarios, type PaintScenario } from './scenarios';
 import { openDialog } from './dialogs';
 import { exportTrainImage, type ExportAction, type ExportOutcome } from './artwork-export';
+import { mountSponsor, sponsorConfig } from './sponsorship';
 import { renderLayerPanel, syncLayerStatus } from './layer-panel';
 import { findPaintCanvas } from './paint-canvas';
 
@@ -874,4 +875,5 @@ publish.addEventListener('click', async () => {
     publish.removeAttribute('aria-busy');
   }
 });
+mountSponsor(document.querySelector<HTMLElement>('footer'), sponsorConfig, document);
 if (import.meta.hot) import.meta.hot.dispose(() => painter.destroy());
